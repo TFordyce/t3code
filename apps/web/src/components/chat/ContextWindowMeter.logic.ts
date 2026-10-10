@@ -136,6 +136,38 @@ export function shouldReserveContextWindowMeter(input: {
   );
 }
 
+/** Share of the last request's input that the provider read from its prompt cache. */
+export function formatContextWindowCacheHitRate(usage: {
+  readonly lastInputTokens?: number | null;
+  readonly lastCachedInputTokens?: number | null;
+}): string | null {
+  const { lastInputTokens, lastCachedInputTokens } = usage;
+  if (lastInputTokens == null || lastInputTokens <= 0 || lastCachedInputTokens == null) {
+    return null;
+  }
+  return `${Math.round((Math.min(lastCachedInputTokens, lastInputTokens) / lastInputTokens) * 100)}%`;
+}
+
+/**
+ * Splits the bar's filled width across the breakdown's categories. The
+ * breakdown explains the headline usage, so the segments always fill exactly
+ * what the headline fills.
+ */
+export function deriveContextWindowBreakdownSegments(
+  breakdown: ReadonlyArray<{ readonly name: string; readonly tokens: number }> | null,
+  filledPercentage: number,
+): Array<{ name: string; tokens: number; widthPercentage: number }> | null {
+  const totalTokens = breakdown?.reduce((sum, category) => sum + category.tokens, 0) ?? 0;
+  if (breakdown === null || totalTokens <= 0) {
+    return null;
+  }
+  return breakdown.map((category) => ({
+    name: category.name,
+    tokens: category.tokens,
+    widthPercentage: (filledPercentage * category.tokens) / totalTokens,
+  }));
+}
+
 export function formatContextWindowCost(cost: {
   readonly amount: number;
   readonly currency: string;
