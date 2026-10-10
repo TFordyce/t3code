@@ -48,6 +48,10 @@ Set **Auto-compact after** in the Claude provider settings to an integer between
 300,000 tokens. This changes when compaction happens, not the model's context
 window. Leave it empty for Claude Code's default.
 
+Hover the context meter after a turn finishes to see what fills the context,
+split into the categories Claude's `/context` counts as used, such as messages
+and system tools.
+
 You can also send `/compact` in an existing conversation. Web and desktop offer
 **Compact context** from the context meter. When you return to a large thread
 after more than an hour, a **Compact** chip with the thread's token count shows

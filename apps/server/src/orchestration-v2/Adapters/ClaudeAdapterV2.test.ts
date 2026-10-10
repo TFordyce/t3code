@@ -2110,6 +2110,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     // A CLI process opened after the first streams from its own queue, so the
     // first one can exit (Queue.shutdown) and a later turn can start another.
     readonly freshQueueOnReopen?: boolean;
+    readonly getContextUsage?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["getContextUsage"];
   }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2204,6 +2205,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   }),
                 interrupt: options?.interrupt ?? Effect.void,
                 close: options?.close?.(sdkMessages) ?? Effect.void,
+                ...(options?.getContextUsage === undefined
+                  ? {}
+                  : { getContextUsage: options.getContextUsage }),
               };
             }),
           forkSession: () => Effect.die("unused forkSession"),
@@ -3204,6 +3208,90 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
         ),
       ),
+  );
+
+  const runContextBreakdownTurn = (
+    getContextUsage: NonNullable<ClaudeAdapterV2.ClaudeAgentSdkQuerySession["getContextUsage"]>,
+  ) =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarnessWithOptions({ getContextUsage });
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("claude-context-breakdown"),
+          text: "Summarize the repo",
+          attachments: [],
+        }),
+      );
+      yield* harness.offerAndWait(
+        makeAssistantTextFrame({ uuid: "00000000-0000-4000-8000-000000000401", text: "Done." }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000402", result: "Done." }),
+      );
+      const terminal = yield* Queue.take(harness.terminalReceipts);
+      const completed = harness.events.findLast((event) => event.type === "provider_turn.updated");
+      return {
+        status: terminal.status,
+        tokenUsage:
+          completed?.type === "provider_turn.updated"
+            ? completed.providerTurn.tokenUsage
+            : undefined,
+      };
+    });
+
+  it.effect("attaches Claude's context breakdown to the completed turn's usage", () =>
+    Effect.gen(function* () {
+      const { status, tokenUsage } = yield* runContextBreakdownTurn(
+        Effect.succeed({
+          categories: [
+            { name: "System prompt", tokens: 3_000, kind: "used" },
+            { name: "System tools", tokens: 12_000, kind: "used" },
+            { name: "MCP tools (deferred)", tokens: 9_000, kind: "deferred" },
+            { name: "Skills", tokens: 0, kind: "used" },
+            { name: "Messages", tokens: 40_000, kind: "used" },
+            { name: "Autocompact buffer", tokens: 33_000, kind: "buffer" },
+            { name: "Free space", tokens: 100_000, kind: "free" },
+          ],
+        }),
+      );
+      assert.equal(status, "completed");
+      // The headline stays the API-reported usage; the breakdown only explains it.
+      assert.equal(tokenUsage?.usedTokens, 2);
+      assert.deepEqual(tokenUsage?.breakdown, [
+        { name: "System prompt", tokens: 3_000 },
+        { name: "System tools", tokens: 12_000 },
+        { name: "Messages", tokens: 40_000 },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+      ),
+    ),
+  );
+
+  it.effect("completes the turn without a breakdown when Claude cannot report one", () =>
+    Effect.gen(function* () {
+      const { status, tokenUsage } = yield* runContextBreakdownTurn(
+        Effect.fail(
+          new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
+            method: "getContextUsage",
+            cause: new Error("control request failed"),
+          }),
+        ),
+      );
+      assert.equal(status, "completed");
+      assert.isUndefined(tokenUsage?.breakdown);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+      ),
+    ),
   );
 
   it.effect("titles Claude reads, searches, and skills on tool completion", () =>

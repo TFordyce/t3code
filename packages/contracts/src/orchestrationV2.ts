@@ -979,6 +979,18 @@ export const OrchestrationV2ProviderTurnTokenUsage = Schema.Struct({
   cachedInputTokens: Schema.optional(NonNegativeInt),
   outputTokens: Schema.optional(NonNegativeInt),
   reasoningOutputTokens: Schema.optional(NonNegativeInt),
+  /**
+   * What occupies the window, by the provider's own category names. Claude
+   * reports it when a turn completes; it explains usedTokens, not replaces it.
+   */
+  breakdown: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: TrimmedNonEmptyString,
+        tokens: NonNegativeInt,
+      }),
+    ).check(Schema.isMaxLength(32)),
+  ),
   /** ISO timestamp of the provider's report; string so wire encoding is stable. */
   updatedAt: Schema.String,
 });
