@@ -147,6 +147,10 @@
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
     },
+    "./mcpServers": {
+      "types": "./src/mcpServers.ts",
+      "import": "./src/mcpServers.ts"
+    },
     "./projectSettings": {
       "types": "./src/projectSettings.ts",
       "import": "./src/projectSettings.ts"

@@ -102,6 +102,7 @@ export const GrokProviderCapabilitiesV2 = {
   tools: {
     ...AcpProviderCapabilitiesV2.tools,
     supportsMcpTools: true,
+    userMcpTransports: [],
   },
   checkpointing: {
     ...AcpProviderCapabilitiesV2.checkpointing,

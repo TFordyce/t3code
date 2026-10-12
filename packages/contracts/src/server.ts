@@ -265,6 +265,9 @@ export const ServerProvider = Schema.Struct({
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
+  // Transports of user MCP servers this driver's sessions carry. Absent when
+  // the server could not tell, which clients must not read as "none".
+  userMcpTransports: Schema.optional(ForwardCompatibleArray(Schema.Literals(["stdio", "http"]))),
   setup: Schema.optional(
     Schema.Struct({
       canAuthenticate: Schema.Boolean,

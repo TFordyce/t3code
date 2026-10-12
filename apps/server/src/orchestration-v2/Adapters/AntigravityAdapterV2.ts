@@ -53,6 +53,7 @@ const AntigravityProviderCapabilitiesV2 = {
   tools: {
     ...AcpProviderCapabilitiesV2.tools,
     supportsMcpTools: true,
+    userMcpTransports: [],
   },
   subagents: {
     ...AcpProviderCapabilitiesV2.subagents,

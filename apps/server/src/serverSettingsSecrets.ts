@@ -81,6 +81,21 @@ const markerEntry = (key: string, raw: string, context?: SecretRowContext): Secr
 const markerValue = (next: SecretValue): string =>
   next.redacted && !next.resolved ? SECRET_REDACTED : next.value;
 
+/** An env row rebuilt from what a kind's visitor answered for it. */
+const applySecretValue = (
+  variable: ProviderInstanceEnvironmentVariable,
+  entry: SecretEntry,
+  next: SecretValue,
+): ProviderInstanceEnvironmentVariable => {
+  if (next.redacted === entry.redacted && next.value === entry.value) return variable;
+  const { valueRedacted: _omit, ...rest } = variable;
+  return {
+    ...rest,
+    value: next.value,
+    ...(next.redacted ? { valueRedacted: true } : {}),
+  };
+};
+
 const providerEnvironmentKind: SecretKind = {
   map: (settings, visit) => {
     const providerInstances: Record<string, ProviderInstanceConfig> = {
@@ -99,16 +114,7 @@ const providerEnvironmentKind: SecretKind = {
         };
         const next = visit(entry);
         if (next === undefined) continue;
-        if (next.redacted === entry.redacted && next.value === entry.value) {
-          environment.push(variable);
-          continue;
-        }
-        const { valueRedacted: _omit, ...rest } = variable;
-        environment.push({
-          ...rest,
-          value: next.value,
-          ...(next.redacted ? { valueRedacted: true } : {}),
-        });
+        environment.push(applySecretValue(variable, entry, next));
       }
       providerInstances[instanceId] = { ...instance, environment } satisfies ProviderInstanceConfig;
     }
@@ -168,10 +174,35 @@ const gitHubKind: SecretKind = {
   },
 };
 
+/** Sensitive env values of user MCP servers, keyed by scope, server and variable. */
+const mcpServerEnvironmentKind: SecretKind = {
+  map: (settings, visit) => {
+    const mcpServers: Record<string, ServerSettings["mcpServers"][string]> = {};
+    for (const [name, server] of Object.entries(settings.mcpServers)) {
+      const environment: ProviderInstanceEnvironmentVariable[] = [];
+      for (const variable of server.env) {
+        const entry: SecretEntry = {
+          key: `mcp-env-${encodeSecretName("global")}-${encodeSecretName(name)}-${encodeSecretName(variable.name)}`,
+          sensitive: variable.sensitive,
+          redacted: variable.valueRedacted === true,
+          value: variable.value,
+          context: { environmentVariable: variable.name },
+        };
+        const next = visit(entry);
+        if (next === undefined) continue;
+        environment.push(applySecretValue(variable, entry, next));
+      }
+      mcpServers[name] = { ...server, env: environment };
+    }
+    return { ...settings, mcpServers };
+  },
+};
+
 /** Every secret-bearing settings field. Add a field here and it is covered everywhere. */
 export const SETTINGS_SECRET_KINDS: ReadonlyArray<SecretKind> = [
   providerEnvironmentKind,
   usageLimitSourceKind,
+  mcpServerEnvironmentKind,
   bitbucketKind,
   gitHubKind,
 ];

@@ -677,6 +677,45 @@ describe("CodexAdapterV2 process spawning", () => {
     );
   });
 
+  it("adds user stdio MCP servers beside the unchanged t3-code entry", () => {
+    const mcpSession = {
+      environmentId: EnvironmentId.make("environment-codex-user-mcp"),
+      threadId: ThreadId.make("thread-codex-user-mcp"),
+      providerSessionId: "mcp-session-codex-user",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer secret-codex-token",
+      browserToolsAvailable: false,
+      userMcp: {
+        servers: [
+          {
+            name: "docs",
+            transport: "stdio" as const,
+            command: "docs-mcp",
+            args: ["--serve"],
+            env: { TOKEN: "real-token" },
+          },
+        ],
+        skipped: [],
+      },
+    };
+
+    const { config } = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession });
+
+    assert.deepEqual(config.mcp_servers, {
+      "t3-code": {
+        url: "http://127.0.0.1:43123/mcp",
+        http_headers: { Authorization: "Bearer secret-codex-token" },
+      },
+      docs: { command: "docs-mcp", args: ["--serve"], env: { TOKEN: "real-token" } },
+    });
+  });
+
+  it("passes no user servers when the slot has none", () => {
+    const { config } = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession: undefined });
+    assert.isUndefined(config.mcp_servers);
+  });
+
   it.effect("resolves Windows command shims through the shared spawn policy", () =>
     Effect.gen(function* () {
       const command = yield* CodexAdapterV2.makeCodexAppServerSpawnCommand({

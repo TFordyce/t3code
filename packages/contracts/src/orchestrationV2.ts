@@ -233,12 +233,19 @@ export const OrchestrationV2StreamingCapabilities = Schema.Struct({
 });
 export type OrchestrationV2StreamingCapabilities = typeof OrchestrationV2StreamingCapabilities.Type;
 
+/** Transports a provider can carry for user MCP servers (`settings.mcpServers`). */
+export const OrchestrationV2UserMcpTransport = Schema.Literals(["stdio", "http"]);
+export type OrchestrationV2UserMcpTransport = typeof OrchestrationV2UserMcpTransport.Type;
+
 export const OrchestrationV2ToolCapabilities = Schema.Struct({
   exposesToolItemIds: Schema.Boolean,
   emitsToolStarted: Schema.Boolean,
   emitsToolCompleted: Schema.Boolean,
   emitsToolOutput: Schema.Boolean,
+  /** Whether the provider carries the built-in `t3-code` server. */
   supportsMcpTools: Schema.Boolean,
+  /** User MCP server transports the adapter passes through; adapters skip any not listed. */
+  userMcpTransports: Schema.Array(OrchestrationV2UserMcpTransport),
   supportsDynamicToolCallbacks: Schema.Boolean,
 });
 export type OrchestrationV2ToolCapabilities = typeof OrchestrationV2ToolCapabilities.Type;

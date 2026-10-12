@@ -312,6 +312,9 @@ const ServerSettingsJson = fromLenientJson(
   }),
 );
 const decodeServerSettingsJsonExit = Schema.decodeUnknownExit(ServerSettingsJson);
+const decodeRawMcpServersExit = Schema.decodeUnknownExit(
+  fromLenientJson(Schema.Struct({ mcpServers: Schema.optionalKey(Schema.Unknown) })),
+);
 /**
  * The retired `providers.<kind>` map, read without its old schemas. Before
  * `providerInstances` existed each built-in driver had one blob there; it
@@ -692,6 +695,21 @@ const make = Effect.gen(function* () {
         }
       } else {
         settings = decoded.value;
+        // Decoding drops invalid `mcpServers` entries; say which ones.
+        const rawMcpServers = decodeRawMcpServersExit(raw);
+        if (
+          rawMcpServers._tag === "Success" &&
+          typeof rawMcpServers.value.mcpServers === "object"
+        ) {
+          const rawNames = Object.keys(rawMcpServers.value.mcpServers ?? {});
+          const dropped = rawNames.filter((name) => !Object.hasOwn(settings.mcpServers, name));
+          if (dropped.length > 0) {
+            yield* Effect.logWarning("dropped invalid mcpServers entries from settings.json", {
+              path: settingsPath,
+              names: dropped,
+            });
+          }
+        }
       }
     }
 
