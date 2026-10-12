@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput } from "./git.ts";
 import {
   AuthOrchestrationOperateScope,
+  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
@@ -54,6 +55,13 @@ export function clientRpcRequiredScopes(
     const payload = decodePrepareThread(input);
     if (payload.mode === "worktree" && payload.threadId !== undefined)
       return [AuthSourceControlWriteScope, AuthOrchestrationOperateScope];
+  }
+  // Only MCP servers are guarded here: they run commands on the host. Other
+  // settings patches keep the checks the settings hooks already make.
+  if (method === WS_METHODS.serverUpdateSettings) {
+    const patch = (input as { readonly patch?: { readonly mcpServers?: unknown } } | undefined)
+      ?.patch;
+    return patch?.mcpServers === undefined ? [] : [AuthProvidersManageScope];
   }
   return Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, method)
     ? [CLIENT_GUARDED_RPC_SCOPES[method as ClientGuardedRpcTag]]

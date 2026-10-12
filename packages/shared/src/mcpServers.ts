@@ -22,5 +22,5 @@ export function resolveMcpServers(
   return Object.entries(settings.mcpServers)
     .filter(([, config]) => config.enabled !== false)
     .map(([name, config]): ResolvedMcpServer => ({ name, config, source: "global" }))
-    .toSorted((left, right) => left.name.localeCompare(right.name));
+    .sort((left, right) => left.name.localeCompare(right.name));
 }

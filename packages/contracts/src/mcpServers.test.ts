@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { AuthProvidersManageScope } from "./auth.ts";
+import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
+import { WS_METHODS } from "./rpc.ts";
 import {
   requiredScopesForServerSettingsPatch,
   ServerSettings,
@@ -67,5 +69,24 @@ describe("ServerSettingsPatch mcpServers", () => {
     expect(
       requiredScopesForServerSettingsPatch({ mcpServers: { a: { ...stdio, args: [] } } }),
     ).toEqual([AuthProvidersManageScope]);
+  });
+});
+
+describe("client permission for mcpServers patches", () => {
+  it("guards a settings update that changes MCP servers with providers-manage", () => {
+    expect(
+      clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, {
+        patch: { mcpServers: { docs: null } },
+      }),
+    ).toEqual([AuthProvidersManageScope]);
+  });
+
+  it("leaves other settings updates to their existing checks", () => {
+    expect(
+      clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, {
+        patch: { worktreesDirectory: "x" },
+      }),
+    ).toEqual([]);
+    expect(clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, undefined)).toEqual([]);
   });
 });
