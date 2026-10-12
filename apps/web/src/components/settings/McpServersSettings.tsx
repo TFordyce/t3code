@@ -51,6 +51,7 @@ import {
   projectMcpPatch,
   projectMcpRows,
   providersWithoutMcpSupport,
+  saveNotice,
   selectProjectMcpCheck,
   urlQueryTokenWarning,
   validateDraft,
@@ -163,7 +164,7 @@ function McpServersEnvironmentPanel({
       <SettingsPageContainer>
         {noticeVisible ? (
           <Alert variant="success">
-            <AlertDescription>Applies to new sessions in this project.</AlertDescription>
+            <AlertDescription>{saveNotice(providers, "project")}</AlertDescription>
             <AlertAction>
               <Button size="xs" variant="ghost" onClick={() => setNoticeVisible(false)}>
                 Dismiss
@@ -276,7 +277,7 @@ function McpServersEnvironmentPanel({
       ) : null}
       {noticeVisible ? (
         <Alert variant="success">
-          <AlertDescription>Applies to new sessions.</AlertDescription>
+          <AlertDescription>{saveNotice(providers)}</AlertDescription>
           <AlertAction>
             <Button size="xs" variant="ghost" onClick={() => setNoticeVisible(false)}>
               Dismiss

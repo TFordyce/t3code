@@ -9,10 +9,12 @@ import {
   T3_MCP_BEARER_ENV,
   T3_MCP_URL_ENV,
   T3_PI_RUNTIME_MODE_ENV,
+  T3_PI_USER_MCP_ENV,
 } from "./mcpExtensionSource.ts";
 import {
   buildPiRpcLaunch,
   materializePiT3McpExtension,
+  piUserMcpTransports,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
 
@@ -27,6 +29,47 @@ const mcpSession = {
   authorizationHeader: "Bearer secret-pi-token",
   browserToolsAvailable: true,
 };
+
+describe("pi user MCP servers", () => {
+  const userMcpServers = [
+    { name: "files", transport: "stdio", command: "npx", args: ["-y", "files"], env: { K: "v" } },
+    {
+      name: "docs",
+      transport: "http",
+      url: "http://127.0.0.1:43123/mcp-proxy/docs",
+      upstreamUrlFingerprint: "fp",
+    },
+  ] as const;
+
+  it("declares both transports from Pi 0.99 and none below it", () => {
+    assert.deepEqual(piUserMcpTransports("0.99.0"), ["stdio", "http"]);
+    assert.deepEqual(piUserMcpTransports("1.2.3"), ["stdio", "http"]);
+    assert.deepEqual(piUserMcpTransports("0.98.9"), []);
+    assert.deepEqual(piUserMcpTransports(null), []);
+  });
+
+  it("hands the servers to the extension in the launch env, with proxy addresses for http", () => {
+    const launch = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: { [T3_PI_USER_MCP_ENV]: "stale" },
+      mcpSession,
+      extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+      userMcpServers,
+    });
+    assert.deepEqual(JSON.parse(launch.env[T3_PI_USER_MCP_ENV] ?? "null"), [
+      { name: "files", transport: "stdio", command: "npx", args: ["-y", "files"], env: { K: "v" } },
+      { name: "docs", transport: "http", url: "http://127.0.0.1:43123/mcp-proxy/docs" },
+    ]);
+
+    const without = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: { [T3_PI_USER_MCP_ENV]: "stale" },
+      mcpSession,
+      extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+    });
+    assert.isUndefined(without.env[T3_PI_USER_MCP_ENV]);
+  });
+});
 
 describe("pi T3 MCP injection", () => {
   it("always adds the permission bridge and configures MCP when available", () => {

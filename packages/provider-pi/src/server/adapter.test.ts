@@ -481,6 +481,25 @@ const expectModelFailure = (errorMessage: string) =>
   }).pipe(Effect.scoped, Effect.provide(layerTest));
 
 describe("PiAdapterV2", () => {
+  it.effect.each([
+    ["0.99.0", ["stdio", "http"]],
+    ["1.0.2", ["stdio", "http"]],
+    ["0.98.0", []],
+    [null, []],
+  ] as const)("declares user MCP transports for Pi %s", ([version, transports]) =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const adapter = yield* makePiAdapterV2({
+        instanceId: PI_INSTANCE_ID,
+        settings: { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+        environment: {},
+        detectVersion: Effect.succeed(version),
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner));
+      const capabilities = yield* adapter.getCapabilities();
+      assert.deepEqual(capabilities.tools.userMcpTransports, transports);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect.each([false, true])(
     "serializes rollback fork hooks with native wake ownership, wake=%s",
     (nativeWake) =>

@@ -2,14 +2,31 @@ import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
-import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcpSession";
+import type {
+  McpProviderSessionConfig,
+  UserMcpServer,
+} from "@t3tools/provider-core/server/mcpSession";
+import { compareSemverVersions } from "@t3tools/shared/semver";
 import {
   PI_T3_MCP_EXTENSION_FILENAME,
   PI_T3_MCP_EXTENSION_SOURCE,
   T3_MCP_BEARER_ENV,
   T3_MCP_URL_ENV,
   T3_PI_RUNTIME_MODE_ENV,
+  T3_PI_USER_MCP_ENV,
 } from "./mcpExtensionSource.ts";
+
+/** Pi 0.99 added `pi.registerMcpServer`, which the T3 extension registers user servers through. */
+const PI_USER_MCP_MIN_VERSION = "0.99.0";
+
+/** The user MCP transports a Pi of `version` can carry; an unknown version carries none. */
+export function piUserMcpTransports(
+  version: string | null,
+): ReadonlyArray<UserMcpServer["transport"]> {
+  return version !== null && compareSemverVersions(version, PI_USER_MCP_MIN_VERSION) >= 0
+    ? ["stdio", "http"]
+    : [];
+}
 
 const RESERVED_PI_LAUNCH_ARGUMENTS = new Set([
   "--continue",
@@ -252,6 +269,8 @@ export function buildPiRpcLaunch(input: {
   readonly environment: NodeJS.ProcessEnv;
   readonly mcpSession: McpProviderSessionConfig | undefined;
   readonly extensionPath: string | undefined;
+  /** Already filtered to the transports Pi declares. Needs `mcpSession` for the proxy bearer. */
+  readonly userMcpServers?: ReadonlyArray<UserMcpServer>;
   readonly ephemeral?: boolean;
   readonly disableExtensions?: boolean;
   readonly disableTools?: boolean;
@@ -291,6 +310,7 @@ export function buildPiRpcLaunch(input: {
   // credentials inherited from the server or a parent provider process.
   delete environment[T3_MCP_URL_ENV];
   delete environment[T3_MCP_BEARER_ENV];
+  delete environment[T3_PI_USER_MCP_ENV];
 
   return {
     args,
@@ -300,6 +320,23 @@ export function buildPiRpcLaunch(input: {
         ? {
             [T3_PI_RUNTIME_MODE_ENV]:
               input.runtimeMode === "auto" ? "approval-required" : input.runtimeMode,
+          }
+        : {}),
+      ...(hasT3Mcp && input.userMcpServers !== undefined && input.userMcpServers.length > 0
+        ? {
+            [T3_PI_USER_MCP_ENV]: JSON.stringify(
+              input.userMcpServers.map((server) =>
+                server.transport === "stdio"
+                  ? {
+                      name: server.name,
+                      transport: "stdio",
+                      command: server.command,
+                      args: server.args,
+                      env: server.env,
+                    }
+                  : { name: server.name, transport: "http", url: server.url },
+              ),
+            ),
           }
         : {}),
       ...(hasT3Mcp && input.mcpSession !== undefined
