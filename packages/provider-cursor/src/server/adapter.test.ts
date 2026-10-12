@@ -29,6 +29,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import {
   cursorMcpServers,
   cursorRuntimeAgentPolicy,
+  cursorSendOptions,
   cursorSdkModelSelection,
   makeCursorAgentOptions,
   makeCursorAdapterV2,
@@ -911,6 +912,84 @@ describe("CursorAdapterV2", () => {
     const logged = JSON.stringify(CursorAgentSdk.loggedCursorAgentOptions(options));
     assert.notInclude(logged, "secret-cursor-api-key");
     assert.notInclude(logged, "secret-cursor-mcp-token");
+  });
+
+  it("passes user servers beside t3-code on create and resume options", () => {
+    const threadId = ThreadId.make("thread-cursor-user-mcp");
+    const mcpSession = {
+      environmentId: EnvironmentId.make("environment-cursor-user-mcp"),
+      threadId,
+      providerSessionId: "mcp-session-cursor-user",
+      providerInstanceId: ProviderInstanceId.make("cursor"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer secret-cursor-mcp-token",
+      browserToolsAvailable: true,
+      userMcp: {
+        servers: [
+          {
+            name: "github",
+            transport: "stdio" as const,
+            command: "npx",
+            args: ["gh-mcp"],
+            env: { GITHUB_TOKEN: "ghp_secret" },
+          },
+          {
+            name: "docs",
+            transport: "http" as const,
+            url: "http://127.0.0.1:43123/mcp-proxy/docs",
+            upstreamUrlFingerprint: "fp",
+          },
+        ],
+        skipped: [],
+      },
+    };
+    const options = makeCursorAgentOptions({
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("cursor"),
+        model: "composer-2.5",
+      },
+      runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: "/workspace" },
+      threadId,
+      mcpSession,
+    });
+    assert.deepEqual(options.mcpServers, {
+      "t3-code": {
+        type: "http",
+        url: "http://127.0.0.1:43123/mcp",
+        headers: { Authorization: "Bearer secret-cursor-mcp-token" },
+      },
+      github: {
+        type: "stdio",
+        command: "npx",
+        args: ["gh-mcp"],
+        env: { GITHUB_TOKEN: "ghp_secret" },
+      },
+      docs: {
+        type: "http",
+        url: "http://127.0.0.1:43123/mcp-proxy/docs",
+        headers: { Authorization: "Bearer secret-cursor-mcp-token" },
+      },
+    });
+    assert.notInclude(
+      JSON.stringify(CursorAgentSdk.loggedCursorAgentOptions(options)),
+      "ghp_secret",
+    );
+  });
+
+  it("leaves mcpServers off send options so the workspace lease keeps native servers", () => {
+    assert.deepEqual(
+      cursorSendOptions({
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "composer-2.5" },
+        interactionMode: "default",
+      }),
+      {
+        model: cursorSdkModelSelection({
+          instanceId: ProviderInstanceId.make("cursor"),
+          model: "composer-2.5",
+        }),
+        mode: "agent",
+      },
+    );
   });
 
   it("recognizes direct and SDK-wrapped abort failures as cancellation", () => {

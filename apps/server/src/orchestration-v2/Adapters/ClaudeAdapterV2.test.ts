@@ -547,6 +547,54 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     });
   });
 
+  it("carries user servers beside t3-code with secrets only in the child env", () => {
+    const threadId = ThreadId.make("thread-claude-user-mcp");
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: {
+        ...mcpSessionFor(threadId),
+        userMcp: {
+          servers: [
+            {
+              name: "github",
+              transport: "stdio",
+              command: "npx",
+              args: ["-y", "gh-mcp"],
+              env: { GITHUB_TOKEN: "ghp_secret" },
+            },
+            {
+              name: "docs",
+              transport: "http",
+              url: "http://127.0.0.1:43123/mcp-proxy/docs",
+              upstreamUrlFingerprint: "fp",
+            },
+          ],
+          skipped: [],
+        },
+      },
+      readOnlySandbox: false,
+    });
+
+    const servers = overrides.mcpServers as Record<string, unknown>;
+    assert.deepEqual(Object.keys(servers), ["t3-code", "github", "docs"]);
+    const placeholder = (servers.github as { env: Record<string, string> }).env.GITHUB_TOKEN!;
+    assert.match(placeholder, /^\$\{[A-Z0-9_]+\}$/);
+    const envName = placeholder.slice(2, -1);
+    assert.equal(overrides.mcpEnvironment?.[envName], "ghp_secret");
+    assert.deepEqual(servers.github, {
+      type: "stdio",
+      command: "npx",
+      args: ["-y", "gh-mcp"],
+      env: { GITHUB_TOKEN: placeholder },
+    });
+    const docs = servers.docs as { type: string; url: string; headers: Record<string, string> };
+    assert.equal(docs.type, "http");
+    assert.equal(docs.url, "http://127.0.0.1:43123/mcp-proxy/docs");
+    assert.equal(docs.headers.Authorization, "${T3_CODE_MCP_AUTHORIZATION}");
+    assert.notInclude(JSON.stringify(servers), "ghp_secret");
+    assert.notInclude(JSON.stringify(servers), "secret-claude-token");
+    assert.deepEqual(overrides.allowedTools, [ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD]);
+  });
+
   it("pre-approves only read-only t3-code tools in a read-only sandbox", () => {
     const threadId = ThreadId.make("thread-claude-mcp-read-only");
     const mcpSession = mcpSessionFor(threadId);
