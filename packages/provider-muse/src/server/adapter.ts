@@ -128,7 +128,7 @@ const MuseProviderCapabilitiesV2 = {
     emitsToolCompleted: true,
     emitsToolOutput: true,
     supportsMcpTools: true,
-    userMcpTransports: [],
+    userMcpTransports: ["stdio", "http"],
     supportsDynamicToolCallbacks: false,
   },
   approvals: {
@@ -1508,6 +1508,29 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                     url: mcpSession.endpoint,
                     headers: { Authorization: mcpSession.authorizationHeader },
                   },
+                  // Optional too: an unreachable user server must not fail the run.
+                  ...Object.fromEntries(
+                    McpProviderSession.userMcpServersFor(
+                      mcpSession,
+                      MuseProviderCapabilitiesV2.tools.userMcpTransports,
+                    ).map((server) => [
+                      server.name,
+                      server.transport === "http"
+                        ? {
+                            transport: "streamableHttp",
+                            mode: "optional",
+                            url: server.url,
+                            headers: { Authorization: mcpSession.authorizationHeader },
+                          }
+                        : {
+                            transport: "stdio",
+                            mode: "optional",
+                            command: server.command,
+                            args: [...server.args],
+                            env: { ...server.env },
+                          },
+                    ]),
+                  ),
                 },
               }
             : undefined;
