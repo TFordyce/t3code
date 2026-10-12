@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   EnvironmentId,
   McpSessionServerStatus,
@@ -15,8 +17,40 @@ export interface UserMcpStdioServer {
   readonly env: Readonly<Record<string, string>>;
 }
 
+/**
+ * A user HTTP server as a provider sees it: only the T3 loopback proxy address.
+ * The provider authenticates to the proxy with the session's `t3-code` bearer
+ * (`authorizationHeader`); the upstream URL and its headers never reach it.
+ */
+export interface UserMcpHttpServer {
+  readonly name: string;
+  readonly transport: "http";
+  /** `<MCP endpoint origin>/mcp-proxy/<name>`. */
+  readonly url: string;
+  /**
+   * Fingerprint of the upstream URL the session started with. The proxy answers
+   * 403 once the entry's URL no longer matches, so a running session cannot
+   * keep reaching a server it was never configured with. Server-side only.
+   */
+  readonly upstreamUrlFingerprint: string;
+}
+
 /** The resolved user servers a session carries; the union grows with each transport. */
-export type UserMcpServer = UserMcpStdioServer;
+export type UserMcpServer = UserMcpStdioServer | UserMcpHttpServer;
+
+/** Stable stand-in for an upstream URL, which may carry a token in its query. */
+export function upstreamUrlFingerprint(url: string): string {
+  return createHash("sha256").update(url).digest("hex");
+}
+
+/** The path the loopback proxy serves a user HTTP server at, under the MCP HTTP server. */
+export const MCP_PROXY_PATH_PREFIX = "/mcp-proxy/";
+
+/** Proxy address for `name`, given the session's `t3-code` MCP endpoint (`…/mcp`). */
+export function mcpProxyUrl(mcpEndpoint: string, name: string): string {
+  const url = new URL(mcpEndpoint);
+  return `${url.origin}${MCP_PROXY_PATH_PREFIX}${encodeURIComponent(name)}`;
+}
 
 export interface SkippedUserMcpServer {
   readonly name: string;

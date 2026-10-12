@@ -6,6 +6,7 @@ import {
   draftFromConfig,
   emptyDraft,
   providersWithoutMcpSupport,
+  urlQueryTokenWarning,
   validateDraft,
 } from "./McpServersSettings.logic";
 
@@ -64,6 +65,9 @@ describe("validateDraft", () => {
   });
 });
 
+const stdioEnv = (config: ReturnType<typeof configFromDraft>) =>
+  config.transport === "stdio" ? config.env : [];
+
 describe("config round trip", () => {
   it("keeps a stored secret redacted unless a new value is typed", () => {
     const draft = draftFromConfig("gh", {
@@ -78,7 +82,7 @@ describe("config round trip", () => {
     expect(draft.args).toBe("--read-only\nserve");
     expect(draft.env[0]).toEqual({ name: "TOKEN", value: "", sensitive: true, redacted: true });
 
-    expect(configFromDraft(draft).env).toEqual([
+    expect(stdioEnv(configFromDraft(draft))).toEqual([
       { name: "TOKEN", value: "", sensitive: true, valueRedacted: true },
       { name: "MODE", value: "fast", sensitive: false },
     ]);
@@ -87,7 +91,7 @@ describe("config round trip", () => {
       ...draft,
       env: [{ ...draft.env[0]!, value: "new", redacted: false }, draft.env[1]!],
     };
-    expect(configFromDraft(retyped).env[0]).toEqual({
+    expect(stdioEnv(configFromDraft(retyped))[0]).toEqual({
       name: "TOKEN",
       value: "new",
       sensitive: true,
@@ -105,6 +109,82 @@ describe("config round trip", () => {
         enabled: false,
       }),
     ).toEqual({ transport: "stdio", command: "run", args: ["a", "b"], env: [], enabled: false });
+  });
+});
+
+describe("http servers", () => {
+  const http = (overrides: Partial<ReturnType<typeof emptyDraft>>) => ({
+    ...emptyDraft(),
+    transport: "http" as const,
+    name: "docs",
+    url: "https://mcp.example.com/mcp",
+    ...overrides,
+  });
+
+  it("needs a valid http(s) URL and no command", () => {
+    expect(validateDraft(http({}), { existingNames: [], isNew: true })).toEqual({});
+    expect(validateDraft(http({ url: "" }), { existingNames: [], isNew: true }).url).toBeDefined();
+    expect(
+      validateDraft(http({ url: "ftp://x.example" }), { existingNames: [], isNew: true }).url,
+    ).toBeDefined();
+    expect(
+      validateDraft(http({ url: "not a url" }), { existingNames: [], isNew: true }).url,
+    ).toBeDefined();
+  });
+
+  it("flags invalid and repeated header names", () => {
+    const row = (name: string) => ({ name, value: "x", sensitive: false, redacted: false });
+    expect(
+      validateDraft(http({ headers: [row("Bad Header")] }), { existingNames: [], isNew: true })
+        .headers,
+    ).toBeDefined();
+    expect(
+      validateDraft(http({ headers: [row("X-A"), row("x-a")] }), {
+        existingNames: [],
+        isNew: true,
+      }).headers,
+    ).toBeDefined();
+  });
+
+  it("round-trips headers and keeps a stored secret redacted", () => {
+    const draft = draftFromConfig("docs", {
+      transport: "http",
+      url: "https://mcp.example.com/mcp",
+      headers: [
+        { name: "Authorization", value: "", sensitive: true, valueRedacted: true },
+        { name: "X-Mode", value: "fast", sensitive: false },
+      ],
+      enabled: false,
+    });
+    expect(draft.transport).toBe("http");
+    expect(draft.headers[0]).toEqual({
+      name: "Authorization",
+      value: "",
+      sensitive: true,
+      redacted: true,
+    });
+    expect(configFromDraft(draft)).toEqual({
+      transport: "http",
+      url: "https://mcp.example.com/mcp",
+      headers: [
+        { name: "Authorization", value: "", sensitive: true, valueRedacted: true },
+        { name: "X-Mode", value: "fast", sensitive: false },
+      ],
+      enabled: false,
+    });
+  });
+});
+
+describe("urlQueryTokenWarning", () => {
+  it("warns when a query parameter looks like a credential", () => {
+    expect(urlQueryTokenWarning("https://x.example/mcp?api_key=abc")).toMatch(/header/);
+    expect(urlQueryTokenWarning("https://x.example/mcp?foo=1&access_token=abc")).toBeDefined();
+  });
+
+  it("stays quiet for plain URLs", () => {
+    expect(urlQueryTokenWarning("https://x.example/mcp")).toBeUndefined();
+    expect(urlQueryTokenWarning("https://x.example/mcp?page=2")).toBeUndefined();
+    expect(urlQueryTokenWarning("not a url")).toBeUndefined();
   });
 });
 

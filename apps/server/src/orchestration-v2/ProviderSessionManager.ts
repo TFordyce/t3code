@@ -42,6 +42,7 @@ import {
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import type { UserMcpSessionServers } from "@t3tools/provider-core/server/mcpSession";
 import { resolveMcpServers } from "@t3tools/shared/mcpServers";
 import * as ServerSettings from "../serverSettings.ts";
@@ -472,10 +473,12 @@ export const layerWithOptions = (
        * with secrets read from the store into server memory. A server whose
        * secret cannot be read is skipped, never started without it. Unreadable
        * settings yield none: a session is better off without user tools than
-       * not starting.
+       * not starting. HTTP servers become their loopback proxy address under
+       * `mcpEndpoint`; their upstream headers stay in the store.
        */
       const resolveUserMcp = Effect.fn("ProviderSessionManagerV2.resolveUserMcp")(function* (
         threadId: ThreadId,
+        mcpEndpoint: string,
       ): Effect.fn.Return<UserMcpSessionServers> {
         if (Option.isNone(serverSettings)) return { servers: [], skipped: [] };
         return yield* Effect.gen(function* () {
@@ -488,8 +491,18 @@ export const layerWithOptions = (
           const skipped: Array<UserMcpSessionServers["skipped"][number]> = [];
           for (const { name, config } of resolveMcpServers(settings, projectId)) {
             // A redacted row that materialized to nothing has no secret in the store.
-            if (config.env.some((v) => v.sensitive && v.valueRedacted === true && v.value === "")) {
+            const rows = config.transport === "http" ? config.headers : config.env;
+            if (rows.some((v) => v.sensitive && v.valueRedacted === true && v.value === "")) {
               skipped.push({ name, reason: "secret-unavailable" });
+              continue;
+            }
+            if (config.transport === "http") {
+              servers.push({
+                name,
+                transport: "http",
+                url: McpProviderSession.mcpProxyUrl(mcpEndpoint, name),
+                upstreamUrlFingerprint: McpProviderSession.upstreamUrlFingerprint(config.url),
+              });
               continue;
             }
             servers.push({
@@ -541,7 +554,6 @@ export const layerWithOptions = (
                 if (browserToolsAvailable) capabilities.add("preview");
                 if (deviceToolsAvailable) capabilities.add("device");
                 const existing = yield* mcpSessions.read(threadId);
-                const userMcp = yield* resolveUserMcp(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
                   // revoke the credential between validation and reservation.
@@ -568,7 +580,10 @@ export const layerWithOptions = (
                     resolved.capabilities.has("device") === deviceToolsAvailable
                   ) {
                     // The credential is reused; the user servers are not.
-                    yield* mcpSessions.set({ ...existing, userMcp });
+                    yield* mcpSessions.set({
+                      ...existing,
+                      userMcp: yield* resolveUserMcp(threadId, existing.endpoint),
+                    });
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
@@ -580,7 +595,10 @@ export const layerWithOptions = (
                   browserToolsAvailable,
                   capabilities,
                 });
-                yield* mcpSessions.set({ ...credential.config, userMcp });
+                yield* mcpSessions.set({
+                  ...credential.config,
+                  userMcp: yield* resolveUserMcp(threadId, credential.config.endpoint),
+                });
                 reserveMcpCredential(threadId, credential.config.providerSessionId);
                 return { mcpCredentialId: credential.config.providerSessionId, issued: true };
               }),

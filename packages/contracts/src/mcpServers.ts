@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceEnvironmentVariable } from "./providerInstance.ts";
 
 /** The built-in server every session already gets. User servers never share its prefix. */
@@ -37,8 +38,41 @@ export const McpStdioServerConfig = Schema.Struct({
 });
 export type McpStdioServerConfig = typeof McpStdioServerConfig.Type;
 
+/** An HTTP header field name: an RFC 9110 token. */
+export const MCP_HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+/** Same row shape as a provider env variable, with a header-token name. */
+export const McpServerHeader = Schema.Struct({
+  name: TrimmedNonEmptyString.check(Schema.isPattern(MCP_HEADER_NAME_PATTERN)),
+  value: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  sensitive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  valueRedacted: Schema.optionalKey(Schema.Boolean),
+});
+export type McpServerHeader = typeof McpServerHeader.Type;
+
+const isHttpUrl = (value: string) => {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
+/** A streamable HTTP server. Providers reach it through the T3 loopback proxy, never directly. */
+export const McpHttpServerConfig = Schema.Struct({
+  transport: Schema.Literal("http"),
+  url: Schema.String.check(
+    Schema.makeFilter((value) => isHttpUrl(value) || "Must be an http(s) URL."),
+  ),
+  headers: Schema.Array(McpServerHeader).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Absent means enabled. */
+  enabled: Schema.optionalKey(Schema.Boolean),
+});
+export type McpHttpServerConfig = typeof McpHttpServerConfig.Type;
+
 /** Tagged on `transport`; other transports join this union. */
-export const McpServerConfig = Schema.Union([McpStdioServerConfig]);
+export const McpServerConfig = Schema.Union([McpStdioServerConfig, McpHttpServerConfig]);
 export type McpServerConfig = typeof McpServerConfig.Type;
 
 const decodeMcpServerNameOption = Schema.decodeUnknownOption(McpServerName);

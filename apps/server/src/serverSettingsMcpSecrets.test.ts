@@ -16,6 +16,58 @@ const mcpChanges = (plan: {
   readonly changes: ReadonlyArray<{ readonly kind: string; readonly secretName: string }>;
 }) => plan.changes.filter((change) => change.secretName.startsWith("mcp-env-"));
 
+const httpWith = (headers: ReadonlyArray<{ name: string; value: string; sensitive: boolean }>) =>
+  ({ transport: "http", url: "https://mcp.example.com/mcp", headers }) as const;
+const headerKey = (server: string, header: string) =>
+  `mcp-header-${encode("global")}-${encode(server)}-${encode(header)}`;
+
+describe("MCP server header secrets", () => {
+  it("stores sensitive headers in the secret store and redacts them for clients", () => {
+    const saved = planSettingsSecretPersist(
+      DEFAULT_SERVER_SETTINGS,
+      withMcp({
+        docs: httpWith([
+          { name: "Authorization", value: "Bearer s3cret", sensitive: true },
+          { name: "X-Mode", value: "fast", sensitive: false },
+        ]),
+      }),
+    );
+    const docs = saved.settings.mcpServers.docs;
+    expect(docs?.transport === "http" ? docs.headers : []).toEqual([
+      { name: "Authorization", value: "", sensitive: true, valueRedacted: true },
+      { name: "X-Mode", value: "fast", sensitive: false },
+    ]);
+    expect(
+      saved.changes.filter((change) => change.secretName.startsWith("mcp-header-")),
+    ).toMatchObject([
+      { kind: "write", secretName: headerKey("docs", "Authorization") },
+      { kind: "remove", secretName: headerKey("docs", "X-Mode") },
+    ]);
+    expect(
+      JSON.stringify(
+        redactSettingsSecrets(
+          withMcp({
+            docs: httpWith([{ name: "Authorization", value: "Bearer s3cret", sensitive: true }]),
+          }),
+        ),
+      ),
+    ).not.toContain("s3cret");
+  });
+
+  it("sweeps the header secrets of a removed server", () => {
+    const stored = planSettingsSecretPersist(
+      DEFAULT_SERVER_SETTINGS,
+      withMcp({
+        docs: httpWith([{ name: "Authorization", value: "Bearer s3cret", sensitive: true }]),
+      }),
+    ).settings;
+    const removed = planSettingsSecretPersist(stored, withMcp({}));
+    expect(
+      removed.changes.filter((change) => change.secretName.startsWith("mcp-header-")),
+    ).toMatchObject([{ kind: "remove", secretName: headerKey("docs", "Authorization") }]);
+  });
+});
+
 describe("MCP server env secrets", () => {
   it("stores sensitive values, leaves plain ones, and redacts for clients", () => {
     const saved = planSettingsSecretPersist(
