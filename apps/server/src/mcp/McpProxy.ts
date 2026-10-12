@@ -71,7 +71,7 @@ const handler = Effect.gen(function* () {
   if (granted?.transport !== "http") return forbidden("This session has no such MCP server.");
 
   // Live lookup: a removed, disabled or re-pointed entry is refused immediately.
-  const entry = yield* upstream.resolve(name, null);
+  const entry = yield* upstream.resolve(name, granted.projectId ?? null);
   if (entry === undefined || entry.urlFingerprint !== granted.upstreamUrlFingerprint) {
     return forbidden("This MCP server is no longer available to this session.");
   }

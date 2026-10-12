@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type {
   EnvironmentId,
   McpSessionServerStatus,
+  ProjectId,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -33,6 +34,11 @@ export interface UserMcpHttpServer {
    * keep reaching a server it was never configured with. Server-side only.
    */
   readonly upstreamUrlFingerprint: string;
+  /**
+   * The thread's project, so the proxy resolves this server the way the
+   * session did, including later project overrides and markers.
+   */
+  readonly projectId?: ProjectId;
 }
 
 /** The resolved user servers a session carries; the union grows with each transport. */

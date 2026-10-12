@@ -125,3 +125,94 @@ export function keepValidMcpServerEntries(raw: unknown): Record<string, unknown>
     ),
   );
 }
+
+/** Where an entry lives: the environment-wide list, or one project's overrides. */
+export const McpServerCheckScope = Schema.String;
+
+export const McpServerCheckStatus = Schema.Literals([
+  "checking",
+  "connected",
+  "needs-auth",
+  "failed",
+]);
+export type McpServerCheckStatus = typeof McpServerCheckStatus.Type;
+
+/**
+ * The result of T3's own check of one configured server, run from the
+ * environment host. `scope` is `"global"` or the ID of the project whose
+ * override this is.
+ */
+export const McpServerCheck = Schema.Struct({
+  scope: McpServerCheckScope,
+  name: McpServerName,
+  status: McpServerCheckStatus,
+  /** ISO timestamp the check started. */
+  checkedAt: Schema.String,
+  toolCount: Schema.optionalKey(Schema.Number),
+  error: Schema.optionalKey(Schema.String),
+});
+export type McpServerCheck = typeof McpServerCheck.Type;
+
+/** The full current set; each update replaces the previous one. */
+export const McpServerChecks = Schema.Array(McpServerCheck);
+export type McpServerChecks = typeof McpServerChecks.Type;
+
+export const McpServerCheckTarget = Schema.Struct({
+  scope: McpServerCheckScope,
+  name: McpServerName,
+});
+export type McpServerCheckTarget = typeof McpServerCheckTarget.Type;
+
+export const CheckMcpServersInput = Schema.Struct({
+  /** Absent means every configured server. */
+  targets: Schema.optional(Schema.Array(McpServerCheckTarget)),
+});
+export type CheckMcpServersInput = typeof CheckMcpServersInput.Type;
+
+/** A project's bare marker that turns the environment entry of the same name off. */
+export const McpServerDisabledMarker = Schema.Struct({ enabled: Schema.Literal(false) });
+export type McpServerDisabledMarker = typeof McpServerDisabledMarker.Type;
+
+/**
+ * One entry of `ProjectSettingsOverrides.mcpServers`: a full config replaces
+ * (or, with no environment entry of that name, adds) a server, a marker turns
+ * the environment one off. A config always has a `transport`, so the two never
+ * overlap.
+ */
+export const McpServerOverride = Schema.Union([McpServerConfig, McpServerDisabledMarker]);
+export type McpServerOverride = typeof McpServerOverride.Type;
+
+export const McpServerOverrides = McpServerRecord(McpServerOverride);
+export type McpServerOverrides = typeof McpServerOverrides.Type;
+
+/** True for the bare `{enabled:false}` marker rather than a full config. */
+export const isMcpServerDisabledMarker = (
+  override: McpServerOverride,
+): override is McpServerDisabledMarker => !("transport" in override);
+
+const isValidMcpServerOverrideEntry = (() => {
+  const decodeOverride = Schema.decodeUnknownOption(McpServerOverride);
+  return (name: string, value: unknown) =>
+    decodeMcpServerNameOption(name)._tag === "Some" && decodeOverride(value)._tag === "Some";
+})();
+
+/**
+ * The stored form of a project's `mcpServers`: like `StoredMcpServers`, one
+ * bad hand-edited entry loses only itself.
+ */
+export const StoredMcpServerOverrides = Schema.Unknown.pipe(
+  Schema.decodeTo(
+    McpServerOverrides,
+    SchemaTransformation.transform<(typeof McpServerOverrides)["Encoded"], unknown>({
+      decode: (raw) => {
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
+        return Object.fromEntries(
+          Object.entries(raw as Record<string, unknown>).filter(([name, value]) =>
+            isValidMcpServerOverrideEntry(name, value),
+          ),
+        ) as (typeof McpServerOverrides)["Encoded"];
+      },
+      encode: (value) => value,
+    }),
+  ),
+);

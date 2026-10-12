@@ -86,6 +86,15 @@ export function applyServerConfigProjection(
         latestEvent: event,
         source: "live",
       }));
+    case "mcpServerChecksUpdated":
+      return Option.map(current, (projection) => ({
+        config: {
+          ...projection.config,
+          mcpServerChecks: event.payload.checks,
+        },
+        latestEvent: event,
+        source: "live",
+      }));
     case "usageLimitSourcesUpdated":
       return Option.map(current, (projection) => ({
         config: {

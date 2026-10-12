@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 
 import { NodeHttpServer } from "@effect/platform-node";
 import { assert, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as McpSession from "@t3tools/provider-core/server/mcpSession";
 import * as Effect from "effect/Effect";
@@ -343,6 +343,60 @@ it.effect("refuses at once after the entry is removed, disabled or re-pointed", 
       assert.equal((yield* client.post("/mcp-proxy/docs", { body: initialize })).status, 403);
       // Only the two allowed calls reached the upstream.
       assert.equal(seen.length, reached + 1);
+    }),
+  ),
+);
+
+it.effect("reaches the project's own config of a server for sessions in that project", () =>
+  withProxy(({ client, seen, upstream, settings }) =>
+    Effect.gen(function* () {
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const projectId = ProjectId.make("project-a");
+      yield* settings.updateSettings({
+        projectSettingsOverrides: {
+          [projectId]: {
+            mcpServers: {
+              docs: { transport: "http", url: upstreamUrl(upstream, "/teapot"), headers: [] },
+            },
+          },
+        },
+      });
+      const grant = (grantedProjectId?: ProjectId) =>
+        sessions.set({
+          environmentId,
+          threadId,
+          providerSessionId: "provider-session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          endpoint: "http://127.0.0.1:1/mcp",
+          authorizationHeader: `Bearer ${BEARER}`,
+          browserToolsAvailable: false,
+          userMcp: {
+            servers: [
+              {
+                name: "docs",
+                transport: "http",
+                url: "http://127.0.0.1:1/mcp-proxy/docs",
+                upstreamUrlFingerprint: McpSession.upstreamUrlFingerprint(
+                  upstreamUrl(upstream, grantedProjectId === undefined ? "/mcp" : "/teapot"),
+                ),
+                ...(grantedProjectId === undefined ? {} : { projectId: grantedProjectId }),
+              },
+            ],
+            skipped: [],
+          },
+        });
+
+      yield* grant(projectId);
+      const inProject = yield* client.post("/mcp-proxy/docs", { body: initialize });
+      assert.equal(inProject.status, 418);
+      assert.equal(seen.at(-1)?.url, "/teapot");
+      assert.isUndefined(seen.at(-1)?.headers["x-api-key"]);
+
+      // A session with no project gets the environment entry.
+      yield* grant();
+      const elsewhere = yield* client.post("/mcp-proxy/docs", { body: initialize });
+      assert.equal(elsewhere.status, 200);
+      assert.equal(seen.at(-1)?.url, "/mcp");
     }),
   ),
 );

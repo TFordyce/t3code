@@ -28,6 +28,7 @@ import {
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   AuthOrchestrationOperateScope,
+  AuthProvidersManageScope,
   type AuthEnvironmentScope,
   type ScheduledTaskListResult,
   AuthSessionId,
@@ -103,6 +104,7 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import { patchChangesProjectMcpServers } from "@t3tools/shared/mcpServers";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -247,6 +249,7 @@ import {
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as McpServerChecks from "./mcp/McpServerChecks.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
@@ -346,6 +349,8 @@ export const withLateEditorConfig = <E, R>(
             return [{ ...current, providers: event.payload.providers }, [event]];
           case "settingsUpdated":
             return [{ ...current, settings: event.payload.settings }, [event]];
+          case "mcpServerChecksUpdated":
+            return [{ ...current, mcpServerChecks: event.payload.checks }, [event]];
           // Themes and usage-limit sources never ride in a snapshot; clients
           // carry their projected values across one.
           default:
@@ -1281,6 +1286,7 @@ const layerWsRpc = (
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
+      const mcpServerChecks = yield* McpServerChecks.McpServerChecks;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
@@ -2389,6 +2395,8 @@ const layerWsRpc = (
             return { keybindings: keybindingsConfig, issues: [] };
           }),
         [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
+        [WS_METHODS.serverCheckMcpServers]: ({ targets }) =>
+          mcpServerChecks.check(targets).pipe(Effect.as({})),
         [WS_METHODS.serverGetStorageCleanupReport]: () => storageCleanup.reports,
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
@@ -2400,6 +2408,17 @@ const layerWsRpc = (
                 )
               : undefined;
             const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
+            // Clients resend a project's whole override entry, so only a real
+            // change to its MCP servers needs providers-manage; the static
+            // scope check cannot see the stored value.
+            if (patch.projectSettingsOverrides !== undefined) {
+              const stored = ServerSettings.redactServerSettingsForClient(
+                yield* serverSettings.getSettings,
+              );
+              if (patchChangesProjectMcpServers(stored, patch)) {
+                yield* authorizeEffect(AuthProvidersManageScope, Effect.void);
+              }
+            }
             const settings = yield* providerInstanceMutation === undefined
               ? serverSettings.updateSettings(nextPatch)
               : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
@@ -2956,7 +2975,17 @@ const layerWsRpc = (
           Stream.unwrap(
             Effect.gen(function* () {
               const usageLimitsCommand = input.usageLimitsCommand === true;
-              const config = yield* loadServerConfig({ usageLimitsCommand });
+              const loadedConfig = yield* loadServerConfig({ usageLimitsCommand });
+              // The first subscriber after boot starts the lazy first check.
+              if (input.mcpServerChecks === true) {
+                yield* Effect.forkDetach(mcpServerChecks.ensureChecked);
+              }
+              const initialMcpServerChecks =
+                input.mcpServerChecks === true ? yield* mcpServerChecks.current : undefined;
+              const config =
+                initialMcpServerChecks === undefined
+                  ? loadedConfig
+                  : { ...loadedConfig, mcpServerChecks: initialMcpServerChecks };
               const keybindingsUpdates = keybindings.streamChanges.pipe(
                 Stream.map((event) => ({
                   version: 1 as const,
@@ -3033,6 +3062,23 @@ const layerWsRpc = (
                       })),
                     )
                   : Stream.empty;
+              // The snapshot already carries the current set, so only changes after it go out.
+              const mcpServerCheckUpdates =
+                input.mcpServerChecks === true
+                  ? mcpServerChecks.streamChanges.pipe(
+                      (updates) =>
+                        Stream.concat(rpcInitialItems([initialMcpServerChecks ?? []]), updates),
+                      Stream.changesWith(
+                        (previous, next) => JSON.stringify(previous) === JSON.stringify(next),
+                      ),
+                      Stream.drop(1),
+                      Stream.map((checks) => ({
+                        version: 1 as const,
+                        type: "mcpServerChecksUpdated" as const,
+                        payload: { checks },
+                      })),
+                    )
+                  : Stream.empty;
               const settingsUpdates = serverSettings.streamChanges.pipe(
                 Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
                 Stream.map((settings) => ({
@@ -3048,7 +3094,10 @@ const layerWsRpc = (
                   providerStatuses,
                   Stream.merge(
                     settingsUpdates,
-                    Stream.merge(environmentThemeUpdates, usageLimitSourceUpdates),
+                    Stream.merge(
+                      environmentThemeUpdates,
+                      Stream.merge(usageLimitSourceUpdates, mcpServerCheckUpdates),
+                    ),
                   ),
                 ),
               );
