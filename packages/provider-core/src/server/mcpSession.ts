@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
-import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  McpSessionServerStatus,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 /** A user MCP server a provider launches itself, with secrets already read from the store. */
 export interface UserMcpStdioServer {
@@ -49,7 +54,8 @@ export function mcpProxyUrl(mcpEndpoint: string, name: string): string {
 
 export interface SkippedUserMcpServer {
   readonly name: string;
-  readonly reason: "secret-unavailable";
+  /** `unsupported` is a server the resolver already knows no adapter can carry. */
+  readonly reason: "secret-unavailable" | "unsupported";
 }
 
 export interface UserMcpSessionServers {
@@ -66,6 +72,38 @@ export function userMcpServersFor(
   transports: ReadonlyArray<UserMcpServer["transport"]>,
 ): ReadonlyArray<UserMcpServer> {
   return (config?.userMcp?.servers ?? []).filter((server) => transports.includes(server.transport));
+}
+
+/**
+ * The session MCP status list an adapter publishes: every user server the
+ * session was handed, with the provider's own report where it has one. Servers
+ * the adapter cannot carry are `unsupported`, an unreadable secret is `failed`,
+ * and anything the provider has not reported is `unknown`. Providers' own
+ * servers, including `t3-code`, are never listed. `undefined` means the session
+ * has no user servers, so the adapter should not set the field at all.
+ */
+export function sessionMcpStatuses(input: {
+  readonly config: Pick<McpProviderSessionConfig, "userMcp"> | undefined;
+  readonly transports: ReadonlyArray<UserMcpServer["transport"]>;
+  readonly reported?: ReadonlyArray<McpSessionServerStatus>;
+}): ReadonlyArray<McpSessionServerStatus> | undefined {
+  const userMcp = input.config?.userMcp;
+  if (userMcp === undefined || (userMcp.servers.length === 0 && userMcp.skipped.length === 0)) {
+    return undefined;
+  }
+  const reported = new Map((input.reported ?? []).map((entry) => [entry.name, entry]));
+  return [
+    ...userMcp.servers.map((server): McpSessionServerStatus =>
+      !input.transports.includes(server.transport)
+        ? { name: server.name, status: "unsupported" }
+        : (reported.get(server.name) ?? { name: server.name, status: "unknown" }),
+    ),
+    ...userMcp.skipped.map((skipped): McpSessionServerStatus =>
+      skipped.reason === "unsupported"
+        ? { name: skipped.name, status: "unsupported" }
+        : { name: skipped.name, status: "failed", error: "secret unavailable" },
+    ),
+  ];
 }
 
 export interface McpProviderSessionConfig {

@@ -14,6 +14,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
+import { McpSessionStatusList } from "./mcpSessionStatus.ts";
 import { ProviderUsageLimitsUpdate } from "./providerUsageLimits.ts";
 import { ProviderApprovalOption } from "./providerPolicy.ts";
 
@@ -714,7 +715,7 @@ const AccountRateLimitsUpdatedPayload = Schema.Struct({
 export type AccountRateLimitsUpdatedPayload = typeof AccountRateLimitsUpdatedPayload.Type;
 
 const McpStatusUpdatedPayload = Schema.Struct({
-  status: Schema.Unknown,
+  servers: McpSessionStatusList,
 });
 export type McpStatusUpdatedPayload = typeof McpStatusUpdatedPayload.Type;
 
