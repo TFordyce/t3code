@@ -1386,8 +1386,7 @@ export function codexMcpListedStatus(entry: {
         : { status: "failed" };
     case "disabled":
       return { status: "disabled" };
-    case null:
-    case undefined:
+    default:
       return { status: "unknown" };
   }
 }

@@ -1,5 +1,6 @@
 import type {
   ChatAttachment,
+  McpSessionServerStatus,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ThreadProjection,
@@ -85,6 +86,18 @@ function resolveThreadProviderSession(projection: Projection): ProviderSession |
       (session) => session.status !== "stopped" && session.status !== "error",
     ) ?? null
   );
+}
+
+/**
+ * The MCP servers the thread's provider session reports, or `null` when the
+ * provider reports nothing (no session, or an adapter without status), which
+ * clients show as `unknown`. Each report replaces the previous list.
+ */
+export function selectThreadMcpSessionServers(
+  projection: Projection | null | undefined,
+): ReadonlyArray<McpSessionServerStatus> | null {
+  if (projection == null) return null;
+  return resolveThreadProviderSession(projection)?.mcpServers ?? null;
 }
 
 export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
