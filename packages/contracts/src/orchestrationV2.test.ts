@@ -452,6 +452,7 @@ describe("orchestration V2 contracts", () => {
         emitsToolCompleted: true,
         emitsToolOutput: true,
         supportsMcpTools: false,
+        userMcpTransports: [],
         supportsDynamicToolCallbacks: false,
       },
       approvals: {

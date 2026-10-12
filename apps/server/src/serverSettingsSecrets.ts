@@ -177,7 +177,7 @@ const gitHubKind: SecretKind = {
 /** Sensitive env values of user MCP servers, keyed by scope, server and variable. */
 const mcpServerEnvironmentKind: SecretKind = {
   map: (settings, visit) => {
-    const mcpServers: ServerSettings["mcpServers"] = {};
+    const mcpServers: Record<string, ServerSettings["mcpServers"][string]> = {};
     for (const [name, server] of Object.entries(settings.mcpServers)) {
       const environment: ProviderInstanceEnvironmentVariable[] = [];
       for (const variable of server.env) {

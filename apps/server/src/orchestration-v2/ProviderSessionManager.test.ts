@@ -472,6 +472,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
+  readonly configureMcp?: boolean;
 }) {
   const layerConfiguredEventSink =
     input.flakyReleaseWrites !== undefined
@@ -524,9 +525,11 @@ function layerTest(input: {
     IdAllocator.layer,
     layerConfiguredMcpRegistry,
     McpProviderSessions.layer,
+    ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
     ProviderSessionManager.layerWithOptions({
       idleTimeoutMs: input.idleTimeoutMs,
       ...(input.maxIdlePinMs === undefined ? {} : { maxIdlePinMs: input.maxIdlePinMs }),
+      ...(input.configureMcp === undefined ? {} : { configureMcp: input.configureMcp }),
     }).pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -4655,4 +4658,164 @@ it.effect(
       });
       assert.isFalse(denied?.capabilities?.has("device"));
     }),
+);
+
+const userStdio = (
+  command: string,
+  extra: {
+    readonly enabled?: boolean;
+    readonly env?: ReadonlyArray<{
+      readonly name: string;
+      readonly value: string;
+      readonly sensitive: boolean;
+      readonly valueRedacted?: boolean;
+    }>;
+  } = {},
+) =>
+  ({
+    transport: "stdio",
+    command,
+    args: ["--serve"],
+    env: extra.env ?? [],
+    ...(extra.enabled === undefined ? {} : { enabled: extra.enabled }),
+  }) as const;
+
+function runUserMcpScenario<A>(input: {
+  readonly mcpServers: Record<string, ReturnType<typeof userStdio>>;
+  readonly configureMcp?: boolean;
+  readonly use: (context: {
+    readonly open: Effect.Effect<void>;
+    readonly detach: Effect.Effect<void>;
+    readonly slot: Effect.Effect<McpProviderSession.McpProviderSessionConfig | undefined>;
+  }) => Effect.Effect<A, never, ServerSettings.ServerSettingsService>;
+}) {
+  return Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const threadId = ThreadId.make("thread-provider-session-manager-user-mcp");
+    return yield* Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      const now = yield* DateTime.now;
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const openSession = manager
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .pipe(Effect.orDie, Effect.asVoid);
+      return yield* input.use({
+        open: openSession,
+        detach: manager
+          .detach({ providerSessionId, threadId, detail: "Workspace changed." })
+          .pipe(Effect.orDie, Effect.asVoid),
+        slot: mcpSessions.read(threadId),
+      });
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          state,
+          idleTimeoutMs: 1_000,
+          ...(input.configureMcp === undefined ? {} : { configureMcp: input.configureMcp }),
+          serverSettingsLayer: ServerSettings.layerTest({ mcpServers: input.mcpServers }),
+        }),
+      ),
+    );
+  });
+}
+
+it.effect("ProviderSessionManagerV2 puts the resolved user MCP servers in the session slot", () =>
+  runUserMcpScenario({
+    mcpServers: {
+      docs: userStdio("docs-mcp", {
+        env: [
+          { name: "TOKEN", value: "real-token", sensitive: true, valueRedacted: true },
+          { name: "MODE", value: "fast", sensitive: false },
+        ],
+      }),
+      paused: userStdio("paused-mcp", { enabled: false }),
+    },
+    use: ({ open, slot }) =>
+      Effect.gen(function* () {
+        yield* open;
+        assert.deepStrictEqual((yield* slot)?.userMcp, {
+          servers: [
+            {
+              name: "docs",
+              transport: "stdio",
+              command: "docs-mcp",
+              args: ["--serve"],
+              env: { TOKEN: "real-token", MODE: "fast" },
+            },
+          ],
+          skipped: [],
+        });
+      }),
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 skips a user MCP server whose secret is unavailable", () =>
+  runUserMcpScenario({
+    mcpServers: {
+      broken: userStdio("broken-mcp", {
+        env: [{ name: "TOKEN", value: "", sensitive: true, valueRedacted: true }],
+      }),
+      fine: userStdio("fine-mcp"),
+    },
+    use: ({ open, slot }) =>
+      Effect.gen(function* () {
+        yield* open;
+        const userMcp = (yield* slot)?.userMcp;
+        assert.deepStrictEqual(
+          userMcp?.servers.map((server) => server.name),
+          ["fine"],
+        );
+        assert.deepStrictEqual(userMcp?.skipped, [
+          { name: "broken", reason: "secret-unavailable" },
+        ]);
+      }),
+  }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 recomputes user MCP servers when the credential is reused",
+  () =>
+    runUserMcpScenario({
+      mcpServers: { first: userStdio("first-mcp") },
+      use: ({ open, detach, slot }) =>
+        Effect.gen(function* () {
+          const settings = yield* ServerSettings.ServerSettingsService;
+          yield* open;
+          const original = yield* slot;
+          yield* detach;
+
+          yield* settings.updateSettings({
+            mcpServers: { first: null, second: userStdio("second-mcp") },
+          });
+          yield* open;
+
+          const reused = yield* slot;
+          assert.equal(reused?.providerSessionId, original?.providerSessionId);
+          assert.deepStrictEqual(
+            reused?.userMcp?.servers.map((server) => server.name),
+            ["second"],
+          );
+        }).pipe(Effect.orDie),
+    }),
+);
+
+it.effect("ProviderSessionManagerV2 gives sessions without MCP configuration no user servers", () =>
+  runUserMcpScenario({
+    mcpServers: { docs: userStdio("docs-mcp") },
+    configureMcp: false,
+    use: ({ open, slot }) =>
+      Effect.gen(function* () {
+        yield* open;
+        assert.isUndefined(yield* slot);
+      }),
+  }),
 );

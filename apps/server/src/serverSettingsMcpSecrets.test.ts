@@ -12,8 +12,9 @@ const encode = (value: string) => Buffer.from(value).toString("base64url");
 const key = (server: string, variable: string) =>
   `mcp-env-${encode("global")}-${encode(server)}-${encode(variable)}`;
 
-const mcpChanges = (plan: { readonly changes: ReadonlyArray<{ readonly secretName: string }> }) =>
-  plan.changes.filter((change) => change.secretName.startsWith("mcp-env-"));
+const mcpChanges = (plan: {
+  readonly changes: ReadonlyArray<{ readonly kind: string; readonly secretName: string }>;
+}) => plan.changes.filter((change) => change.secretName.startsWith("mcp-env-"));
 
 describe("MCP server env secrets", () => {
   it("stores sensitive values, leaves plain ones, and redacts for clients", () => {

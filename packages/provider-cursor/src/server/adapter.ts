@@ -120,6 +120,7 @@ export const CursorProviderCapabilitiesV2 = {
     emitsToolCompleted: true,
     emitsToolOutput: true,
     supportsMcpTools: true,
+    userMcpTransports: [],
     supportsDynamicToolCallbacks: false,
   },
   approvals: {

@@ -575,6 +575,7 @@ export const AcpProviderCapabilitiesV2 = {
     emitsToolCompleted: true,
     emitsToolOutput: true,
     supportsMcpTools: false,
+    userMcpTransports: [],
     supportsDynamicToolCallbacks: false,
   },
   approvals: {
@@ -662,6 +663,7 @@ function negotiatedCapabilities(
       // The stdio bridge (`t3 acp-mcp-bridge`) makes the t3-code MCP toolkit
       // available regardless of the agent's optional http/sse MCP support.
       supportsMcpTools: true,
+      userMcpTransports: [],
     },
     checkpointing: {
       ...base.checkpointing,

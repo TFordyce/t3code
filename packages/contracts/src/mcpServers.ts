@@ -75,8 +75,8 @@ const isValidMcpServerEntry = (() => {
 export const StoredMcpServers = Schema.Unknown.pipe(
   Schema.decodeTo(
     McpServers,
-    SchemaTransformation.transform<McpServers["Encoded"], unknown>({
-      decode: (raw) => keepValidMcpServerEntries(raw) as McpServers["Encoded"],
+    SchemaTransformation.transform<(typeof McpServers)["Encoded"], unknown>({
+      decode: (raw) => keepValidMcpServerEntries(raw) as (typeof McpServers)["Encoded"],
       encode: (value) => value,
     }),
   ),

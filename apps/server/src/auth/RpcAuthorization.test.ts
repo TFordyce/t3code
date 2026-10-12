@@ -322,6 +322,33 @@ describe("settings mutation authorization", () => {
       expect(handled).toBe(false);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("does not let a settings grant change user MCP servers", () =>
+    Effect.gen(function* () {
+      let handled = false;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.serverUpdateSettings, () =>
+              Effect.sync(() => {
+                handled = true;
+                return DEFAULT_SERVER_SETTINGS;
+              }),
+            ),
+            RpcAuthorization.layer([AuthSettingsWriteScope]),
+          ),
+        ),
+      );
+      expect(
+        yield* client[WS_METHODS.serverUpdateSettings]({
+          patch: {
+            mcpServers: { docs: { transport: "stdio", command: "docs-mcp", args: [], env: [] } },
+          },
+        }).pipe(Effect.flip),
+      ).toMatchObject({ requiredPermission: AuthProvidersManageScope });
+      expect(handled).toBe(false);
+    }).pipe(Effect.scoped),
+  );
 });
 
 it.effect("requires task permission before attaching a prepared worktree to a thread", () =>
