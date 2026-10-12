@@ -40,6 +40,7 @@ import {
   draftFromConfig,
   emptyDraft,
   providersWithoutMcpSupport,
+  saveNotice,
   urlQueryTokenWarning,
   validateDraft,
   type McpEnvDraftRow,
@@ -114,7 +115,7 @@ function McpServersEnvironmentPanel({
       ) : null}
       {noticeVisible ? (
         <Alert variant="success">
-          <AlertDescription>Applies to new sessions.</AlertDescription>
+          <AlertDescription>{saveNotice(providers)}</AlertDescription>
           <AlertAction>
             <Button size="xs" variant="ghost" onClick={() => setNoticeVisible(false)}>
               Dismiss

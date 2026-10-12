@@ -203,3 +203,14 @@ export function providersWithoutMcpSupport(
     .map((provider) => provider.displayName ?? provider.driver);
   return [...new Set(names)];
 }
+
+/**
+ * The notice shown after a save. OpenCode registers servers on one shared
+ * server per directory, so its running sessions pick a change up too.
+ */
+export function saveNotice(providers: ReadonlyArray<ServerProvider>): string {
+  const base = "Applies to new sessions.";
+  return providers.some((provider) => provider.enabled && provider.driver === "opencode")
+    ? `${base} OpenCode sessions pick it up now.`
+    : base;
+}
