@@ -125,3 +125,45 @@ export function keepValidMcpServerEntries(raw: unknown): Record<string, unknown>
     ),
   );
 }
+
+/** Where an entry lives: the environment-wide list, or one project's overrides. */
+export const McpServerCheckScope = Schema.String;
+
+export const McpServerCheckStatus = Schema.Literals([
+  "checking",
+  "connected",
+  "needs-auth",
+  "failed",
+]);
+export type McpServerCheckStatus = typeof McpServerCheckStatus.Type;
+
+/**
+ * The result of T3's own check of one configured server, run from the
+ * environment host. `scope` is `"global"` until project overrides exist.
+ */
+export const McpServerCheck = Schema.Struct({
+  scope: McpServerCheckScope,
+  name: McpServerName,
+  status: McpServerCheckStatus,
+  /** ISO timestamp the check started. */
+  checkedAt: Schema.String,
+  toolCount: Schema.optionalKey(Schema.Number),
+  error: Schema.optionalKey(Schema.String),
+});
+export type McpServerCheck = typeof McpServerCheck.Type;
+
+/** The full current set; each update replaces the previous one. */
+export const McpServerChecks = Schema.Array(McpServerCheck);
+export type McpServerChecks = typeof McpServerChecks.Type;
+
+export const McpServerCheckTarget = Schema.Struct({
+  scope: McpServerCheckScope,
+  name: McpServerName,
+});
+export type McpServerCheckTarget = typeof McpServerCheckTarget.Type;
+
+export const CheckMcpServersInput = Schema.Struct({
+  /** Absent means every configured server. */
+  targets: Schema.optional(Schema.Array(McpServerCheckTarget)),
+});
+export type CheckMcpServersInput = typeof CheckMcpServersInput.Type;

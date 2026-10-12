@@ -471,3 +471,36 @@ it.effect("denies manual cleanup before the handler without settings permission"
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );
+
+it.effect("denies an MCP server re-check before the handler without providers-manage", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.serverCheckMcpServers
+        > => tag !== WS_METHODS.serverCheckMcpServers,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.serverCheckMcpServers, () =>
+            Effect.sync(() => {
+              handled = true;
+              return {};
+            }),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope, AuthSettingsWriteScope]),
+        ),
+      ),
+    );
+    expect(yield* client[WS_METHODS.serverCheckMcpServers]({}).pipe(Effect.flip)).toMatchObject({
+      requiredPermission: AuthProvidersManageScope,
+    });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
