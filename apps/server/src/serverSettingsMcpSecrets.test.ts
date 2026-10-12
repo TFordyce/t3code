@@ -1,4 +1,9 @@
-import { DEFAULT_SERVER_SETTINGS, type ServerSettings } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProjectId,
+  type ProjectSettingsOverrides,
+  type ServerSettings,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import { planSettingsSecretPersist, redactSettingsSecrets } from "./serverSettingsSecrets.ts";
 
@@ -126,6 +131,82 @@ describe("MCP server env secrets", () => {
     const removed = planSettingsSecretPersist(stored, withMcp({}));
     expect(mcpChanges(removed)).toEqual([
       expect.objectContaining({ kind: "remove", secretName: key("gh", "TOKEN") }),
+    ]);
+  });
+});
+
+describe("project MCP override secrets", () => {
+  const projectId = ProjectId.make("project-a");
+  const withProjectMcp = (mcpServers: NonNullable<ProjectSettingsOverrides["mcpServers"]>) =>
+    ({
+      ...DEFAULT_SERVER_SETTINGS,
+      projectSettingsOverrides: { [projectId]: { mcpServers } },
+    }) as ServerSettings;
+  const projectEnvKey = (server: string, variable: string) =>
+    `mcp-env-${encode(`project:${projectId}`)}-${encode(server)}-${encode(variable)}`;
+  const projectHeaderKey = (server: string, header: string) =>
+    `mcp-header-${encode(`project:${projectId}`)}-${encode(server)}-${encode(header)}`;
+
+  it("stores a project override's secrets under a project-scoped key and redacts them", () => {
+    const saved = planSettingsSecretPersist(
+      DEFAULT_SERVER_SETTINGS,
+      withProjectMcp({
+        gh: stdioWith([{ name: "TOKEN", value: "ghp_work", sensitive: true }]),
+        docs: httpWith([{ name: "Authorization", value: "Bearer work", sensitive: true }]),
+        off: { enabled: false },
+      }),
+    );
+    const stored = saved.settings.projectSettingsOverrides[projectId]?.mcpServers;
+    expect(JSON.stringify(stored)).not.toContain("ghp_work");
+    expect(stored?.off).toEqual({ enabled: false });
+    expect(
+      saved.changes.filter((c) => c.kind === "write").map((change) => change.secretName),
+    ).toEqual([projectEnvKey("gh", "TOKEN"), projectHeaderKey("docs", "Authorization")]);
+    expect(
+      JSON.stringify(
+        redactSettingsSecrets(
+          withProjectMcp({
+            gh: stdioWith([{ name: "TOKEN", value: "ghp_work", sensitive: true }]),
+          }),
+        ),
+      ),
+    ).not.toContain("ghp_work");
+  });
+
+  it("keeps global and project secrets of the same server name apart", () => {
+    const global = planSettingsSecretPersist(
+      DEFAULT_SERVER_SETTINGS,
+      withMcp({ gh: stdioWith([{ name: "TOKEN", value: "personal", sensitive: true }]) }),
+    ).settings;
+    const both = planSettingsSecretPersist(global, {
+      ...global,
+      projectSettingsOverrides: {
+        [projectId]: {
+          mcpServers: { gh: stdioWith([{ name: "TOKEN", value: "work", sensitive: true }]) },
+        },
+      },
+    });
+    const writes = both.changes.filter((change) => change.kind === "write");
+    expect(writes.map((change) => change.secretName)).toEqual([projectEnvKey("gh", "TOKEN")]);
+    // The global row stays redacted, so its stored value is kept.
+    expect(both.changes.some((c) => c.secretName === key("gh", "TOKEN"))).toBe(false);
+  });
+
+  it("sweeps a project's secrets when its overrides are removed", () => {
+    const stored = planSettingsSecretPersist(
+      DEFAULT_SERVER_SETTINGS,
+      withProjectMcp({ gh: stdioWith([{ name: "TOKEN", value: "work", sensitive: true }]) }),
+    ).settings;
+    const removed = planSettingsSecretPersist(stored, {
+      ...stored,
+      projectSettingsOverrides: {},
+    });
+    expect(removed.changes.filter((c) => c.secretName.startsWith("mcp-"))).toMatchObject([
+      {
+        kind: "remove",
+        operation: "remove-stale-secret",
+        secretName: projectEnvKey("gh", "TOKEN"),
+      },
     ]);
   });
 });

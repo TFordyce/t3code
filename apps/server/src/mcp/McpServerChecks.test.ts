@@ -3,10 +3,11 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 
 import { assert, it } from "@effect/vitest";
-import type {
-  McpServerCheck,
-  McpServerConfig,
-  ServerSettings as ServerSettingsType,
+import {
+  ProjectId,
+  type McpServerCheck,
+  type McpServerConfig,
+  type ServerSettings as ServerSettingsType,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -331,6 +332,105 @@ it.live("re-checks an entry when it is created or edited, and never at start", (
         Stream.runHead,
       );
       assert.equal(needsAuth._tag, "Some");
+    }),
+  ).pipe(Effect.provide(feedLayer(5_000))),
+);
+
+const projectId = ProjectId.make("project-a");
+const projectResultOf = (checks: ReadonlyArray<McpServerCheck>, name: string) =>
+  checks.find((check) => check.scope === projectId && check.name === name);
+
+it.live("keeps a project override's check apart from the environment entry's", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* startFakeHttpServer;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const checks = yield* McpServerChecks.McpServerChecks;
+      yield* settings.updateSettings({
+        mcpServers: {
+          docs: { transport: "http", url: url(server, "/mcp"), headers: [] },
+          shared: { transport: "http", url: url(server, "/mcp"), headers: [] },
+        },
+        projectSettingsOverrides: {
+          [projectId]: {
+            mcpServers: {
+              docs: { transport: "http", url: url(server, "/auth"), headers: [] },
+              local: { transport: "http", url: url(server, "/mcp"), headers: [] },
+              shared: { enabled: false },
+            },
+          },
+        },
+      });
+      yield* checks.check();
+      const current = yield* checks.current;
+      assert.equal(resultOf(current, "docs")?.status, "connected");
+      assert.equal(projectResultOf(current, "docs")?.status, "needs-auth");
+      assert.equal(projectResultOf(current, "local")?.status, "connected");
+      assert.equal(resultOf(current, "shared")?.status, "connected");
+      // A marker has nothing to check.
+      assert.isUndefined(projectResultOf(current, "shared"));
+    }),
+  ).pipe(Effect.provide(layerFor(5_000))),
+);
+
+it.live("checks just the requested project target, and drops it once the override goes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* startFakeHttpServer;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const checks = yield* McpServerChecks.McpServerChecks;
+      yield* settings.updateSettings({
+        mcpServers: { docs: { transport: "http", url: url(server, "/mcp"), headers: [] } },
+        projectSettingsOverrides: {
+          [projectId]: {
+            mcpServers: { local: { transport: "http", url: url(server, "/mcp"), headers: [] } },
+          },
+        },
+      });
+      yield* checks.check([{ scope: projectId, name: "local" }]);
+      const current = yield* checks.current;
+      assert.deepEqual(
+        current.map((check) => [check.scope, check.name]),
+        [[projectId, "local"]],
+      );
+
+      yield* settings.updateSettings({ projectSettingsOverrides: { [projectId]: null } });
+      yield* checks.check([{ scope: projectId, name: "local" }]);
+      assert.deepEqual(yield* checks.current, []);
+    }),
+  ).pipe(Effect.provide(layerFor(5_000))),
+);
+
+it.live("re-checks a project override when it is edited", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* startFakeHttpServer;
+      const checks = yield* McpServerChecks.McpServerChecks;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const publish = (path: string) =>
+        settings.updateSettings({
+          projectSettingsOverrides: {
+            [projectId]: {
+              mcpServers: { local: { transport: "http", url: url(server, path), headers: [] } },
+            },
+          },
+        });
+      yield* publish("/mcp");
+      assert.equal(
+        (yield* checks.streamChanges.pipe(
+          Stream.filter((set) => projectResultOf(set, "local")?.status === "connected"),
+          Stream.runHead,
+        ))._tag,
+        "Some",
+      );
+      yield* publish("/auth");
+      assert.equal(
+        (yield* checks.streamChanges.pipe(
+          Stream.filter((set) => projectResultOf(set, "local")?.status === "needs-auth"),
+          Stream.runHead,
+        ))._tag,
+        "Some",
+      );
     }),
   ).pipe(Effect.provide(feedLayer(5_000))),
 );

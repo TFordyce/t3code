@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, assert } from "@effect/vitest";
-import type { ServerSettingsPatch } from "@t3tools/contracts";
+import { ProjectId, type ServerSettingsPatch } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -22,6 +22,25 @@ const layerServerSettingsWithSecrets = () =>
 
 const encode = (value: string) => Buffer.from(value).toString("base64url");
 const tokenKey = `mcp-env-${encode("global")}-${encode("gh")}-${encode("TOKEN")}`;
+
+const projectId = ProjectId.make("project-a");
+const projectTokenKey = `mcp-env-${encode(`project:${projectId}`)}-${encode("gh")}-${encode("TOKEN")}`;
+
+const addProjectOverride = (token: string): ServerSettingsPatch => ({
+  projectSettingsOverrides: {
+    [projectId]: {
+      mcpServers: {
+        gh: {
+          transport: "stdio",
+          command: "npx",
+          args: [],
+          env: [{ name: "TOKEN", value: token, sensitive: true }],
+        },
+        off: { enabled: false },
+      },
+    },
+  },
+});
 
 const addServer = (token: string): ServerSettingsPatch => ({
   mcpServers: {
@@ -90,6 +109,45 @@ it.layer(NodeServices.layer)("server settings mcpServers", (it) => {
 
       assert.deepStrictEqual((yield* settings.getSettings).mcpServers, {});
       assert.isTrue(Option.isNone(yield* store.get(tokenKey)));
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect("keeps a project override's secrets apart from the environment entry's", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const store = yield* ServerSecretStore.ServerSecretStore;
+      yield* settings.updateSettings(addServer("ghp_personal"));
+
+      yield* settings.updateSettings(addProjectOverride("ghp_work"));
+
+      const onDisk = yield* fileSystem.readFileString(config.settingsPath);
+      assert.notInclude(onDisk, "ghp_work");
+      const decode = (value: Option.Option<Uint8Array>) =>
+        new TextDecoder().decode(Option.getOrThrow(value));
+      assert.strictEqual(decode(yield* store.get(tokenKey)), "ghp_personal");
+      assert.strictEqual(decode(yield* store.get(projectTokenKey)), "ghp_work");
+      const forClient = ServerSettingsModule.redactServerSettingsForClient(
+        yield* settings.getSettings,
+      );
+      assert.notInclude(JSON.stringify(forClient), "ghp_work");
+      assert.deepStrictEqual(forClient.projectSettingsOverrides[projectId]?.mcpServers?.off, {
+        enabled: false,
+      });
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect("clearing a project's MCP overrides deletes their stored secrets", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const store = yield* ServerSecretStore.ServerSecretStore;
+      yield* settings.updateSettings(addProjectOverride("ghp_work"));
+
+      yield* settings.updateSettings({ projectSettingsOverrides: { [projectId]: null } });
+
+      assert.deepStrictEqual((yield* settings.getSettings).projectSettingsOverrides, {});
+      assert.isTrue(Option.isNone(yield* store.get(projectTokenKey)));
     }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 

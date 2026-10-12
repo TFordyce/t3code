@@ -139,7 +139,8 @@ export type McpServerCheckStatus = typeof McpServerCheckStatus.Type;
 
 /**
  * The result of T3's own check of one configured server, run from the
- * environment host. `scope` is `"global"` until project overrides exist.
+ * environment host. `scope` is `"global"` or the ID of the project whose
+ * override this is.
  */
 export const McpServerCheck = Schema.Struct({
   scope: McpServerCheckScope,
@@ -167,3 +168,51 @@ export const CheckMcpServersInput = Schema.Struct({
   targets: Schema.optional(Schema.Array(McpServerCheckTarget)),
 });
 export type CheckMcpServersInput = typeof CheckMcpServersInput.Type;
+
+/** A project's bare marker that turns the environment entry of the same name off. */
+export const McpServerDisabledMarker = Schema.Struct({ enabled: Schema.Literal(false) });
+export type McpServerDisabledMarker = typeof McpServerDisabledMarker.Type;
+
+/**
+ * One entry of `ProjectSettingsOverrides.mcpServers`: a full config replaces
+ * (or, with no environment entry of that name, adds) a server, a marker turns
+ * the environment one off. A config always has a `transport`, so the two never
+ * overlap.
+ */
+export const McpServerOverride = Schema.Union([McpServerConfig, McpServerDisabledMarker]);
+export type McpServerOverride = typeof McpServerOverride.Type;
+
+export const McpServerOverrides = McpServerRecord(McpServerOverride);
+export type McpServerOverrides = typeof McpServerOverrides.Type;
+
+/** True for the bare `{enabled:false}` marker rather than a full config. */
+export const isMcpServerDisabledMarker = (
+  override: McpServerOverride,
+): override is McpServerDisabledMarker => !("transport" in override);
+
+const isValidMcpServerOverrideEntry = (() => {
+  const decodeOverride = Schema.decodeUnknownOption(McpServerOverride);
+  return (name: string, value: unknown) =>
+    decodeMcpServerNameOption(name)._tag === "Some" && decodeOverride(value)._tag === "Some";
+})();
+
+/**
+ * The stored form of a project's `mcpServers`: like `StoredMcpServers`, one
+ * bad hand-edited entry loses only itself.
+ */
+export const StoredMcpServerOverrides = Schema.Unknown.pipe(
+  Schema.decodeTo(
+    McpServerOverrides,
+    SchemaTransformation.transform<(typeof McpServerOverrides)["Encoded"], unknown>({
+      decode: (raw) => {
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
+        return Object.fromEntries(
+          Object.entries(raw as Record<string, unknown>).filter(([name, value]) =>
+            isValidMcpServerOverrideEntry(name, value),
+          ),
+        ) as (typeof McpServerOverrides)["Encoded"];
+      },
+      encode: (value) => value,
+    }),
+  ),
+);

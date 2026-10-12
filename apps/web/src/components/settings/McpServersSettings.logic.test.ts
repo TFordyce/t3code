@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type McpServerConfig,
+  type ServerProvider,
+} from "@t3tools/contracts";
 
 import {
   configFromDraft,
   draftFromConfig,
   emptyDraft,
+  overrideDraftFromEnvironment,
+  projectMcpPatch,
+  projectMcpRows,
   providersWithoutMcpSupport,
+  selectProjectMcpCheck,
   urlQueryTokenWarning,
   validateDraft,
 } from "./McpServersSettings.logic";
@@ -211,5 +221,147 @@ describe("providersWithoutMcpSupport", () => {
     expect(providersWithoutMcpSupport([provider("a"), provider("b", [], false)], "stdio")).toEqual(
       [],
     );
+  });
+});
+
+describe("project MCP rows", () => {
+  const projectId = ProjectId.make("project-a");
+  const stdio = (command: string, enabled?: boolean): McpServerConfig => ({
+    transport: "stdio",
+    command,
+    args: [],
+    env: [],
+    ...(enabled === undefined ? {} : { enabled }),
+  });
+  const settings = (
+    mcpServers: Record<string, McpServerConfig>,
+    project: Record<string, McpServerConfig | { enabled: false }> | undefined,
+    other: Record<string, McpServerConfig | { enabled: false }> = {},
+  ) => ({
+    mcpServers,
+    projectSettingsOverrides: {
+      ...(project === undefined ? {} : { [projectId]: { mcpServers: project } }),
+      [ProjectId.make("project-b")]: { mcpServers: other },
+    },
+  });
+
+  it("splits project-only servers, overrides and inherited rows", () => {
+    const rows = projectMcpRows(
+      settings(
+        { gh: stdio("g"), db: stdio("d"), linear: stdio("l"), paused: stdio("p", false) },
+        { local: stdio("x"), gh: stdio("g2"), linear: { enabled: false } },
+      ),
+      projectId,
+    );
+    expect(rows.project.map((row) => [row.name, row.kind])).toEqual([
+      ["gh", "override"],
+      ["local", "project"],
+    ]);
+    expect(
+      rows.inherited.map((row) => [row.name, row.offForProject, row.offOnEnvironment]),
+    ).toEqual([
+      ["db", false, false],
+      ["linear", true, false],
+      ["paused", false, true],
+    ]);
+  });
+
+  it("ignores a marker for a server the environment no longer has", () => {
+    const rows = projectMcpRows(settings({}, { ghost: { enabled: false } }), projectId);
+    expect(rows).toEqual({ project: [], inherited: [] });
+  });
+
+  it("reads other projects' overrides as nothing", () => {
+    const rows = projectMcpRows(
+      settings({ gh: stdio("g") }, undefined, { gh: stdio("x") }),
+      projectId,
+    );
+    expect(rows.inherited.map((row) => row.name)).toEqual(["gh"]);
+    expect(rows.project).toEqual([]);
+  });
+});
+
+describe("projectMcpPatch", () => {
+  const projectId = ProjectId.make("project-a");
+  const gh: McpServerConfig = { transport: "stdio", command: "g", args: [], env: [] };
+
+  it("round-trips off, on, override and use-environment-config", () => {
+    let current: Record<string, unknown> = {};
+    const apply = (patch: ReturnType<typeof projectMcpPatch>) => {
+      current = { ...current, ...patch.projectSettingsOverrides };
+    };
+    const entry = () => (current as Record<string, unknown>)[projectId] ?? null;
+
+    apply(projectMcpPatch({ projectSettingsOverrides: {} }, projectId, "gh", { enabled: false }));
+    expect(entry()).toEqual({ mcpServers: { gh: { enabled: false } } });
+
+    apply(projectMcpPatch({ projectSettingsOverrides: current as never }, projectId, "gh", null));
+    expect(entry()).toBeNull();
+
+    apply(projectMcpPatch({ projectSettingsOverrides: current as never }, projectId, "gh", gh));
+    expect(entry()).toEqual({ mcpServers: { gh } });
+
+    apply(projectMcpPatch({ projectSettingsOverrides: current as never }, projectId, "gh", null));
+    expect(entry()).toBeNull();
+  });
+
+  it("keeps the project's other overrides and servers", () => {
+    const patch = projectMcpPatch(
+      {
+        projectSettingsOverrides: {
+          [projectId]: { defaultAutoPull: true, mcpServers: { db: { enabled: false } } },
+        },
+      },
+      projectId,
+      "gh",
+      gh,
+    );
+    expect(patch.projectSettingsOverrides[projectId]).toEqual({
+      defaultAutoPull: true,
+      mcpServers: { db: { enabled: false }, gh },
+    });
+    const cleared = projectMcpPatch(
+      { projectSettingsOverrides: { [projectId]: { defaultAutoPull: true, mcpServers: { gh } } } },
+      projectId,
+      "gh",
+      null,
+    );
+    expect(cleared.projectSettingsOverrides[projectId]).toEqual({ defaultAutoPull: true });
+  });
+});
+
+describe("overrideDraftFromEnvironment", () => {
+  it("does not carry stored secrets over, since they belong to the environment entry", () => {
+    const draft = overrideDraftFromEnvironment("gh", {
+      transport: "stdio",
+      command: "g",
+      args: ["-y"],
+      env: [
+        { name: "TOKEN", value: "", sensitive: true, valueRedacted: true },
+        { name: "MODE", value: "fast", sensitive: false },
+      ],
+    });
+    expect(draft.env).toEqual([
+      { name: "TOKEN", value: "", sensitive: true, redacted: false },
+      { name: "MODE", value: "fast", sensitive: false, redacted: false },
+    ]);
+    expect(draft.command).toBe("g");
+    expect(draft.enabled).toBe(true);
+  });
+});
+
+describe("selectProjectMcpCheck", () => {
+  const check = (scope: string, status: "connected" | "failed") => ({
+    scope,
+    name: "gh",
+    status,
+    checkedAt: "2026-10-13T00:00:00.000Z",
+  });
+  const config = { mcpServerChecks: [check("global", "connected"), check("project-a", "failed")] };
+
+  it("shows an override's own result and an inherited row's environment result", () => {
+    expect(selectProjectMcpCheck(config, "project-a", "gh", "override")?.status).toBe("failed");
+    expect(selectProjectMcpCheck(config, "project-a", "gh", "project")?.status).toBe("failed");
+    expect(selectProjectMcpCheck(config, "project-a", "gh", "global")?.status).toBe("connected");
   });
 });

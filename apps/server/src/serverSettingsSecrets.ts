@@ -13,12 +13,16 @@
  *
  * @module serverSettingsSecrets
  */
-import type {
-  McpServerHeader,
-  ProviderInstanceConfig,
-  ProviderInstanceEnvironmentVariable,
-  ServerSettings,
-  UsageLimitSourceConfig,
+import {
+  isMcpServerDisabledMarker,
+  type McpServerConfig,
+  type McpServerDisabledMarker,
+  type McpServerHeader,
+  type ProjectSettingsOverrides,
+  type ProviderInstanceConfig,
+  type ProviderInstanceEnvironmentVariable,
+  type ServerSettings,
+  type UsageLimitSourceConfig,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -175,60 +179,73 @@ const gitHubKind: SecretKind = {
   },
 };
 
-/** Sensitive header values of user HTTP MCP servers, keyed by scope, server and header. */
-const mcpServerHeaderKind: SecretKind = {
-  map: (settings, visit) => {
-    const mcpServers: Record<string, ServerSettings["mcpServers"][string]> = {};
-    for (const [name, server] of Object.entries(settings.mcpServers)) {
-      if (server.transport !== "http") {
-        mcpServers[name] = server;
+type McpServerEntries = Readonly<Record<string, McpServerConfig | McpServerDisabledMarker>>;
+
+/**
+ * Visits the rows of every MCP entry, environment-wide first and then each
+ * project's overrides, and rebuilds the entries from the answers. The scope
+ * is part of the store key, so a project override never shares a secret with
+ * the environment entry of the same name.
+ */
+const mapMcpServerRows = (
+  settings: ServerSettings,
+  kind: "env" | "header",
+  visit: (entry: SecretEntry) => SecretValue | undefined,
+): ServerSettings => {
+  const mapEntries = <Entries extends McpServerEntries>(scope: string, entries: Entries) => {
+    const mapped: Record<string, McpServerConfig | McpServerDisabledMarker> = {};
+    for (const [name, server] of Object.entries(entries)) {
+      const wanted = kind === "header" ? "http" : "stdio";
+      if (isMcpServerDisabledMarker(server) || server.transport !== wanted) {
+        mapped[name] = server;
         continue;
       }
-      const headers: McpServerHeader[] = [];
-      for (const header of server.headers) {
+      const rows: ReadonlyArray<ProviderInstanceEnvironmentVariable | McpServerHeader> =
+        server.transport === "http" ? server.headers : server.env;
+      const next: Array<ProviderInstanceEnvironmentVariable | McpServerHeader> = [];
+      for (const row of rows) {
         const entry: SecretEntry = {
-          key: `mcp-header-${encodeSecretName("global")}-${encodeSecretName(name)}-${encodeSecretName(header.name)}`,
-          sensitive: header.sensitive,
-          redacted: header.valueRedacted === true,
-          value: header.value,
-          context: { environmentVariable: header.name },
+          key: `mcp-${kind}-${encodeSecretName(scope)}-${encodeSecretName(name)}-${encodeSecretName(row.name)}`,
+          sensitive: row.sensitive,
+          redacted: row.valueRedacted === true,
+          value: row.value,
+          context: { environmentVariable: row.name },
         };
-        const next = visit(entry);
-        if (next === undefined) continue;
-        headers.push(applySecretValue(header, entry, next));
+        const answer = visit(entry);
+        if (answer === undefined) continue;
+        next.push(applySecretValue(row, entry, answer));
       }
-      mcpServers[name] = { ...server, headers };
+      mapped[name] =
+        server.transport === "http"
+          ? { ...server, headers: next as McpServerHeader[] }
+          : { ...server, env: next as ProviderInstanceEnvironmentVariable[] };
     }
-    return { ...settings, mcpServers };
-  },
+    return mapped as Entries;
+  };
+
+  const projectSettingsOverrides: Record<string, ProjectSettingsOverrides> = {};
+  for (const [projectId, overrides] of Object.entries(settings.projectSettingsOverrides)) {
+    projectSettingsOverrides[projectId] =
+      overrides.mcpServers === undefined
+        ? overrides
+        : { ...overrides, mcpServers: mapEntries(`project:${projectId}`, overrides.mcpServers) };
+  }
+  return {
+    ...settings,
+    mcpServers: mapEntries("global", settings.mcpServers),
+    projectSettingsOverrides:
+      projectSettingsOverrides as ServerSettings["projectSettingsOverrides"],
+  };
+};
+
+/** Sensitive header values of user HTTP MCP servers, keyed by scope, server and header. */
+const mcpServerHeaderKind: SecretKind = {
+  map: (settings, visit) => mapMcpServerRows(settings, "header", visit),
 };
 
 /** Sensitive env values of user MCP servers, keyed by scope, server and variable. */
 const mcpServerEnvironmentKind: SecretKind = {
-  map: (settings, visit) => {
-    const mcpServers: Record<string, ServerSettings["mcpServers"][string]> = {};
-    for (const [name, server] of Object.entries(settings.mcpServers)) {
-      if (server.transport !== "stdio") {
-        mcpServers[name] = server;
-        continue;
-      }
-      const environment: ProviderInstanceEnvironmentVariable[] = [];
-      for (const variable of server.env) {
-        const entry: SecretEntry = {
-          key: `mcp-env-${encodeSecretName("global")}-${encodeSecretName(name)}-${encodeSecretName(variable.name)}`,
-          sensitive: variable.sensitive,
-          redacted: variable.valueRedacted === true,
-          value: variable.value,
-          context: { environmentVariable: variable.name },
-        };
-        const next = visit(entry);
-        if (next === undefined) continue;
-        environment.push(applySecretValue(variable, entry, next));
-      }
-      mcpServers[name] = { ...server, env: environment };
-    }
-    return { ...settings, mcpServers };
-  },
+  map: (settings, visit) => mapMcpServerRows(settings, "env", visit),
 };
 
 /** Every secret-bearing settings field. Add a field here and it is covered everywhere. */

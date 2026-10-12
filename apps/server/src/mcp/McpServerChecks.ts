@@ -18,11 +18,14 @@ import {
   StreamableHTTPError,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type {
-  McpServerCheck,
-  McpServerCheckStatus,
-  McpServerCheckTarget,
-  McpServerConfig,
+import {
+  isMcpServerDisabledMarker,
+  type McpServerCheck,
+  type McpServerCheckStatus,
+  type McpServerCheckTarget,
+  type McpServerConfig,
+  type ProjectId,
+  type ServerSettings as ServerSettingsValue,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -41,6 +44,32 @@ const MAX_TOOL_PAGES = 20;
 const MAX_ERROR_LENGTH = 300;
 
 type Checks = ReadonlyArray<McpServerCheck>;
+
+/** One configured entry as a check sees it: environment-wide, or a project's full config. */
+interface ConfiguredEntry {
+  readonly scope: string;
+  readonly name: string;
+  readonly config: McpServerConfig;
+}
+
+const keyOf = (scope: string, name: string) => `${scope}:${name}`;
+
+/** Every entry that can be checked. Project markers have nothing to check and are left out. */
+const configuredEntries = (
+  settings: Pick<ServerSettingsValue, "mcpServers" | "projectSettingsOverrides">,
+): ReadonlyMap<string, ConfiguredEntry> => {
+  const entries = new Map<string, ConfiguredEntry>();
+  for (const [name, config] of Object.entries(settings.mcpServers)) {
+    entries.set(keyOf(GLOBAL_SCOPE, name), { scope: GLOBAL_SCOPE, name, config });
+  }
+  for (const [projectId, overrides] of Object.entries(settings.projectSettingsOverrides)) {
+    for (const [name, override] of Object.entries(overrides.mcpServers ?? {})) {
+      if (isMcpServerDisabledMarker(override)) continue;
+      entries.set(keyOf(projectId, name), { scope: projectId, name, config: override });
+    }
+  }
+  return entries;
+};
 
 export class McpServerChecks extends Context.Service<
   McpServerChecks,
@@ -90,10 +119,9 @@ const make = (timeout: Duration.Duration) =>
     const generations = new Map<string, number>();
     const everChecked = yield* Ref.make(false);
 
-    const keyOf = (name: string) => `${GLOBAL_SCOPE}:${name}`;
-    const replace = (name: string, next: McpServerCheck | undefined) =>
+    const replace = (scope: string, name: string, next: McpServerCheck | undefined) =>
       SubscriptionRef.update(state, (checks) => {
-        const others = checks.filter((c) => !(c.scope === GLOBAL_SCOPE && c.name === name));
+        const others = checks.filter((c) => !(c.scope === scope && c.name === name));
         return next === undefined ? others : [...others, next];
       });
 
@@ -190,6 +218,7 @@ const make = (timeout: Duration.Duration) =>
     };
 
     const probe = Effect.fn("McpServerChecks.probe")(function* (
+      scope: string,
       name: string,
       config: McpServerConfig,
     ) {
@@ -201,7 +230,10 @@ const make = (timeout: Duration.Duration) =>
         config.transport === "stdio"
           ? Effect.tryPromise((signal) => probeStdio(config, signal))
           : Effect.gen(function* () {
-              const entry = yield* upstream.resolve(name, null);
+              const entry = yield* upstream.resolve(
+                name,
+                scope === GLOBAL_SCOPE ? null : (scope as ProjectId),
+              );
               if (entry === undefined) {
                 return failed("The server's stored secrets could not be read.");
               }
@@ -220,41 +252,47 @@ const make = (timeout: Duration.Duration) =>
       );
     });
 
-    const checkOne = Effect.fn("McpServerChecks.checkOne")(function* (name: string) {
+    const checkOne = Effect.fn("McpServerChecks.checkOne")(function* (
+      target: McpServerCheckTarget,
+    ) {
+      const { scope, name } = target;
+      const key = keyOf(scope, name);
       const current = yield* settings.getSettings.pipe(
         Effect.catch(() => Effect.succeed(undefined)),
       );
-      const config = current?.mcpServers[name];
-      const generation = (generations.get(keyOf(name)) ?? 0) + 1;
-      generations.set(keyOf(name), generation);
+      const config =
+        current === undefined ? undefined : configuredEntries(current).get(key)?.config;
+      const generation = (generations.get(key) ?? 0) + 1;
+      generations.set(key, generation);
       if (config === undefined || !isEnabled(config)) {
-        yield* replace(name, undefined);
+        yield* replace(scope, name, undefined);
         return;
       }
       const checkedAt = new Date().toISOString();
-      yield* replace(name, { scope: GLOBAL_SCOPE, name, status: "checking", checkedAt });
-      const outcome = yield* probe(name, config);
+      yield* replace(scope, name, { scope, name, status: "checking", checkedAt });
+      const outcome = yield* probe(scope, name, config);
       // An edit or removal that landed meanwhile owns the row now.
-      if (generations.get(keyOf(name)) !== generation) return;
-      yield* replace(name, { scope: GLOBAL_SCOPE, name, checkedAt, ...outcome });
+      if (generations.get(key) !== generation) return;
+      yield* replace(scope, name, { scope, name, checkedAt, ...outcome });
     });
 
     const check: McpServerChecks["Service"]["check"] = Effect.fn("McpServerChecks.check")(
       function* (targets) {
         yield* Ref.set(everChecked, true);
-        const configured = yield* settings.getSettings.pipe(
-          Effect.map((current) => Object.keys(current.mcpServers)),
-          Effect.catch(() => Effect.succeed([] as Array<string>)),
-        );
-        const requested =
-          targets === undefined
-            ? [
-                ...new Set([
-                  ...configured,
-                  ...(yield* SubscriptionRef.get(state)).map((c) => c.name),
-                ]),
-              ]
-            : targets.filter((t) => t.scope === GLOBAL_SCOPE).map((t) => t.name);
+        const requested: ReadonlyArray<McpServerCheckTarget> =
+          targets ??
+          (yield* Effect.gen(function* () {
+            const configured = yield* settings.getSettings.pipe(
+              Effect.map((current) => [...configuredEntries(current).values()]),
+              Effect.catch(() => Effect.succeed([] as Array<ConfiguredEntry>)),
+            );
+            const held = yield* SubscriptionRef.get(state);
+            const unique = new Map<string, McpServerCheckTarget>();
+            for (const { scope, name } of [...configured, ...held]) {
+              unique.set(keyOf(scope, name), { scope, name });
+            }
+            return [...unique.values()];
+          }));
         yield* Effect.forEach(requested, checkOne, { concurrency: "unbounded", discard: true });
       },
     );
@@ -262,17 +300,20 @@ const make = (timeout: Duration.Duration) =>
     // Edits re-check just the entries whose config changed. The first
     // emission only sets the baseline, so nothing runs at boot.
     let previous = yield* settings.getSettings.pipe(
-      Effect.map((current) => current.mcpServers),
-      Effect.catch(() => Effect.succeed({} as Record<string, McpServerConfig>)),
+      Effect.map(configuredEntries),
+      Effect.catch(() => Effect.succeed(new Map<string, ConfiguredEntry>())),
     );
     yield* settings.streamChanges.pipe(
       Stream.runForEach((next) => {
         const before = previous;
-        previous = next.mcpServers;
-        const names = new Set([...Object.keys(before), ...Object.keys(next.mcpServers)]);
-        const changed = [...names].filter(
-          (name) => JSON.stringify(before[name]) !== JSON.stringify(next.mcpServers[name]),
-        );
+        const after = configuredEntries(next);
+        previous = after;
+        const changed = [...new Set([...before.keys(), ...after.keys()])]
+          .filter((key) => JSON.stringify(before.get(key)) !== JSON.stringify(after.get(key)))
+          .map((key) => {
+            const entry = after.get(key) ?? before.get(key)!;
+            return { scope: entry.scope, name: entry.name };
+          });
         return Effect.forEach(changed, checkOne, { concurrency: "unbounded", discard: true });
       }),
       Effect.forkScoped({ startImmediately: true }),
