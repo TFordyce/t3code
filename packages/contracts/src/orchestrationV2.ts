@@ -37,6 +37,7 @@ import {
   TurnItemId,
 } from "./baseSchemas.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
+import { McpSessionStatusList } from "./mcpSessionStatus.ts";
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
@@ -745,6 +746,12 @@ export const OrchestrationV2ProviderSession = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   lastError: Schema.NullOr(Schema.String),
+  /**
+   * The session's MCP servers and their reported status. Each update replaces
+   * the list. Absent when the provider reports nothing, which clients show as
+   * `unknown`.
+   */
+  mcpServers: Schema.optional(McpSessionStatusList),
 });
 export type OrchestrationV2ProviderSession = typeof OrchestrationV2ProviderSession.Type;
 

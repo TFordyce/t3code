@@ -11,6 +11,7 @@ import {
   CheckpointId,
   CodexSettings,
   EnvironmentId,
+  type McpSessionServerStatus,
   MessageId,
   type ModelSelection,
   NodeId,
@@ -2180,6 +2181,154 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         ),
       ),
   );
+
+  it.effect("publishes session MCP status from the server list and startup pushes", () =>
+    Effect.gen(function* () {
+      const scenario = "mcp-session-status";
+      const nativeThreadId = "mcp-status-thread";
+      const threadId = ThreadId.make(`thread-${scenario}`);
+      const stdio = (name: string) => ({
+        name,
+        transport: "stdio" as const,
+        command: `${name}-mcp`,
+        args: [],
+        env: {},
+      });
+      yield* (yield* McpProviderSessions.McpProviderSessions).set({
+        environmentId: EnvironmentId.make("environment-mcp-status"),
+        threadId,
+        providerSessionId: "mcp-session-status",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer secret",
+        browserToolsAvailable: true,
+        userMcp: {
+          servers: [stdio("docs"), stdio("crm")],
+          skipped: [{ name: "vault", reason: "secret-unavailable" }],
+        },
+      });
+      const serverStatus = (name: string, runtimeStatus: string) => ({
+        name,
+        authStatus: "unsupported",
+        runtimeStatus,
+        tools: {},
+        resources: [],
+        resourceTemplates: [],
+      });
+      const push = (name: string, status: string, failureReason?: string) => ({
+        type: "emit_inbound" as const,
+        label: `startupStatus/${name}/${status}`,
+        frame: {
+          method: "mcpServer/startupStatus/updated",
+          params: {
+            name,
+            status,
+            ...(failureReason === undefined ? {} : { failureReason }),
+            threadId: nativeThreadId,
+          },
+        },
+      });
+      const transcript = makeCodexReplayTranscript({
+        scenario,
+        entries: [
+          ...codexReplayPreamble({
+            nativeThreadId,
+            nativeTurnId: "unused",
+            prompt: "unused",
+          }).slice(0, 5),
+          {
+            type: "expect_outbound",
+            label: "mcpServerStatus/list",
+            frame: {
+              id: 3,
+              method: "mcpServerStatus/list",
+              params: { threadId: nativeThreadId, detail: "toolsAndAuthOnly" },
+            },
+          },
+          {
+            type: "emit_inbound",
+            label: "mcpServerStatus/list",
+            frame: {
+              id: 3,
+              result: {
+                data: [
+                  serverStatus("t3-code", "connected"),
+                  serverStatus("docs", "starting"),
+                  serverStatus("crm", "notStarted"),
+                ],
+                nextCursor: null,
+              },
+            },
+          },
+          push("docs", "ready"),
+          push("crm", "failed", "reauthenticationRequired"),
+        ],
+      });
+      const lists: Array<ReadonlyArray<McpSessionServerStatus> | undefined> = [];
+      const settled = yield* Deferred.make<void>();
+      yield* makeCodexReplayHarness(transcript, (event) => {
+        if (event.type !== "provider_session.updated") return Effect.void;
+        lists.push(event.providerSession.mcpServers);
+        return event.providerSession.mcpServers?.some(
+          (entry) => entry.name === "crm" && entry.status === "needs-auth",
+        )
+          ? Deferred.succeed(settled, undefined)
+          : Effect.void;
+      });
+      yield* Deferred.await(settled);
+
+      assert.deepEqual(lists[0], [
+        { name: "docs", status: "unknown" },
+        { name: "crm", status: "unknown" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
+      ]);
+      assert.deepEqual(lists[1], [
+        { name: "docs", status: "connecting" },
+        { name: "crm", status: "connecting" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
+      ]);
+      assert.deepEqual(lists.at(-1), [
+        { name: "docs", status: "connected" },
+        { name: "crm", status: "needs-auth" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
+  it("maps native Codex MCP statuses into the shared status values", () => {
+    const startup = (status: string, failureReason?: string) =>
+      CodexAdapterV2.codexMcpStartupStatus({
+        status: status as never,
+        ...(failureReason === undefined ? {} : { failureReason: failureReason as never }),
+        error: status === "failed" ? "boom" : null,
+      });
+    assert.deepEqual(startup("starting"), { status: "connecting" });
+    assert.deepEqual(startup("ready"), { status: "connected" });
+    assert.deepEqual(startup("failed"), { status: "failed", error: "boom" });
+    assert.deepEqual(startup("cancelled"), { status: "failed" });
+    assert.deepEqual(startup("failed", "reauthenticationRequired"), { status: "needs-auth" });
+
+    const listed = (runtimeStatus: string | null, toolCount = 0) =>
+      CodexAdapterV2.codexMcpListedStatus({
+        runtimeStatus: runtimeStatus as never,
+        tools: Object.fromEntries(
+          Array.from({ length: toolCount }, (_, index) => [`tool-${index}`, {} as never]),
+        ),
+      });
+    assert.deepEqual(listed("notStarted"), { status: "connecting" });
+    assert.deepEqual(listed("starting"), { status: "connecting" });
+    assert.deepEqual(listed("connected", 2), { status: "connected", toolCount: 2 });
+    assert.deepEqual(listed("authenticationRequired"), { status: "needs-auth" });
+    assert.deepEqual(listed("failed"), { status: "failed" });
+    assert.deepEqual(listed("cancelled"), { status: "failed" });
+    assert.deepEqual(listed("disabled"), { status: "disabled" });
+    assert.deepEqual(listed(null), { status: "unknown" });
+  });
 
   it.effect("identifies sessions to Codex with the same client info as main", () =>
     Effect.gen(function* () {
