@@ -502,6 +502,8 @@ export const layerWithOptions = (
                 transport: "http",
                 url: McpProviderSession.mcpProxyUrl(mcpEndpoint, name),
                 upstreamUrlFingerprint: McpProviderSession.upstreamUrlFingerprint(config.url),
+                // The proxy re-resolves in this project, so a later project override or marker applies at once.
+                ...(projectId === null ? {} : { projectId }),
               });
               continue;
             }

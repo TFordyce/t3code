@@ -139,3 +139,43 @@ describe("server checks", () => {
     ]);
   });
 });
+
+describe("project MCP overrides", () => {
+  const patchFor = (mcpServers: unknown) => ({
+    projectSettingsOverrides: { "project-a": { mcpServers } },
+  });
+
+  it("decodes a full config, a bare marker and keeps other override keys", () => {
+    const patch = decodeServerSettingsPatch({
+      projectSettingsOverrides: {
+        "project-a": {
+          defaultAutoPull: true,
+          mcpServers: { gh: { transport: "stdio", command: "gh-mcp" }, linear: { enabled: false } },
+        },
+      },
+    });
+    const entry = patch.projectSettingsOverrides?.["project-a" as never];
+    expect(entry?.defaultAutoPull).toBe(true);
+    expect(entry?.mcpServers?.linear).toEqual({ enabled: false });
+    expect(entry?.mcpServers?.gh).toMatchObject({
+      transport: "stdio",
+      command: "gh-mcp",
+      args: [],
+    });
+  });
+
+  it.each(["Upper", "t3-code", "has space"])("rejects project server name %j", (name) => {
+    expect(() => decodeServerSettingsPatch(patchFor({ [name]: { enabled: false } }))).toThrow();
+  });
+
+  it("rejects an entry that is neither a config nor the disabled marker", () => {
+    expect(() => decodeServerSettingsPatch(patchFor({ gh: { enabled: true } }))).toThrow();
+    expect(() => decodeServerSettingsPatch(patchFor({ gh: {} }))).toThrow();
+  });
+
+  it("does not need providers-manage just because a project override is present", () => {
+    expect(
+      requiredScopesForServerSettingsPatch(patchFor({ gh: { enabled: false } }) as never),
+    ).toEqual([expect.not.stringMatching(/providers:manage/)]);
+  });
+});

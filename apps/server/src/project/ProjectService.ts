@@ -31,6 +31,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import { planThreadDeletion } from "../orchestration-v2/ThreadDeletion.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
 export interface ProjectCreateInput extends ProjectCreatePayload {
@@ -153,6 +154,7 @@ export const make = Effect.gen(function* () {
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+  const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   // Commands for one project run in order. Commands that claim a workspace root
   // also hold that root, so two projects cannot both claim it.
   const projectLocks = yield* KeyedLock.make<ProjectId>();
@@ -486,6 +488,33 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * A deleted project's MCP overrides go with it. The settings write sweeps
+   * their secrets and sign-ins, which the secret store cannot list and would
+   * otherwise orphan. Best effort: the project is already deleted.
+   */
+  const clearProjectMcpOverrides = Effect.fn("ProjectService.clearProjectMcpOverrides")(function* (
+    projectId: ProjectId,
+  ) {
+    if (Option.isNone(serverSettings)) return;
+    const settings = serverSettings.value;
+    yield* Effect.gen(function* () {
+      const entry = (yield* settings.getSettings).projectSettingsOverrides[projectId];
+      if (entry?.mcpServers === undefined) return;
+      const { mcpServers: _removed, ...rest } = entry;
+      yield* settings.updateSettings({
+        projectSettingsOverrides: { [projectId]: Object.keys(rest).length === 0 ? null : rest },
+      });
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not remove a deleted project's MCP overrides.", {
+          projectId,
+          cause,
+        }),
+      ),
+    );
+  });
+
   const deleteProject: ProjectService["Service"]["delete"] = Effect.fn("ProjectService.delete")(
     function* (input) {
       const { projectId } = input;
@@ -500,6 +529,7 @@ export const make = Effect.gen(function* () {
         yield* deleteChildThreads(input);
       }
       yield* commit({ type: "project.delete", commandId: input.commandId, projectId });
+      yield* clearProjectMcpOverrides(projectId);
       yield* projectEnrichment.invalidate([existing.value.workspaceRoot]);
       return yield* readCommitted(projectId);
     },

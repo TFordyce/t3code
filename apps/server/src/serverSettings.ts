@@ -19,6 +19,7 @@ import {
   ProjectId,
   ProjectScript,
   ProjectSettingsOverrides,
+  StoredMcpServerOverrides,
   type ProviderInstanceConfig,
   type ProviderInstanceMutation,
   defaultInstanceIdForDriver,
@@ -307,6 +308,8 @@ const ServerSettingsJson = fromLenientJson(
       Schema.Struct({
         ...ProjectSettingsOverrides.fields,
         responseStreamingMode: Schema.optionalKey(PersistedResponseStreamingMode),
+        // A hand-edited bad entry loses only itself.
+        mcpServers: Schema.optionalKey(StoredMcpServerOverrides),
       }),
     ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }),

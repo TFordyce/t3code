@@ -1,11 +1,18 @@
 import {
   BUILT_IN_MCP_SERVER_NAME,
+  isMcpServerDisabledMarker,
   MCP_HEADER_NAME_PATTERN,
   MCP_SERVER_NAME_PATTERN,
   ProviderInstanceEnvironmentVariableName,
+  type McpServerCheck,
   type McpServerConfig,
+  type McpServerOverride,
+  type ProjectId,
+  type ProjectSettingsOverrides,
   type ServerProvider,
+  type ServerSettings,
 } from "@t3tools/contracts";
+import { selectMcpServerCheck } from "@t3tools/client-runtime/state/mcp-server-checks";
 import * as Schema from "effect/Schema";
 
 const isEnvironmentVariableName = Schema.is(ProviderInstanceEnvironmentVariableName);
@@ -202,4 +209,110 @@ export function providersWithoutMcpSupport(
     )
     .map((provider) => provider.displayName ?? provider.driver);
   return [...new Set(names)];
+}
+
+/** One row in a project's own section: its servers and its overrides of environment ones. */
+export interface ProjectMcpRow {
+  readonly name: string;
+  readonly config: McpServerConfig;
+  readonly kind: "project" | "override";
+}
+
+/** An environment server as a project sees it. */
+export interface InheritedMcpRow {
+  readonly name: string;
+  readonly config: McpServerConfig;
+  /** The project has a marker turning it off. */
+  readonly offForProject: boolean;
+  /** Off at environment level, so the project switch is inert. */
+  readonly offOnEnvironment: boolean;
+}
+
+type McpSettingsView = Pick<ServerSettings, "mcpServers" | "projectSettingsOverrides">;
+
+/**
+ * The rows of a project's MCP page: what the project holds itself ("This
+ * project") and the environment servers it inherits, in name order.
+ */
+export function projectMcpRows(
+  settings: McpSettingsView,
+  projectId: ProjectId,
+): {
+  readonly project: ReadonlyArray<ProjectMcpRow>;
+  readonly inherited: ReadonlyArray<InheritedMcpRow>;
+} {
+  const overrides = settings.projectSettingsOverrides[projectId]?.mcpServers ?? {};
+  const project: ProjectMcpRow[] = [];
+  const inherited: InheritedMcpRow[] = [];
+  for (const [name, override] of Object.entries(overrides)) {
+    if (isMcpServerDisabledMarker(override)) continue;
+    project.push({
+      name,
+      config: override,
+      kind: Object.hasOwn(settings.mcpServers, name) ? "override" : "project",
+    });
+  }
+  for (const [name, config] of Object.entries(settings.mcpServers)) {
+    const override = overrides[name];
+    if (override !== undefined && !isMcpServerDisabledMarker(override)) continue;
+    inherited.push({
+      name,
+      config,
+      offForProject: override !== undefined,
+      offOnEnvironment: config.enabled === false,
+    });
+  }
+  const byName = (left: { readonly name: string }, right: { readonly name: string }) =>
+    left.name.localeCompare(right.name);
+  return { project: project.toSorted(byName), inherited: inherited.toSorted(byName) };
+}
+
+/**
+ * The patch that sets one project entry (`null` removes it). A project patch
+ * replaces the project's whole override entry, so this resends the rest of it.
+ */
+export function projectMcpPatch(
+  settings: Pick<ServerSettings, "projectSettingsOverrides">,
+  projectId: ProjectId,
+  name: string,
+  value: McpServerOverride | null,
+): { readonly projectSettingsOverrides: Record<ProjectId, ProjectSettingsOverrides | null> } {
+  const { mcpServers: current = {}, ...rest } = settings.projectSettingsOverrides[projectId] ?? {};
+  const { [name]: _replaced, ...others } = current;
+  const mcpServers = value === null ? others : { ...others, [name]: value };
+  const entry: ProjectSettingsOverrides = {
+    ...rest,
+    ...(Object.keys(mcpServers).length === 0 ? {} : { mcpServers }),
+  };
+  return {
+    projectSettingsOverrides: { [projectId]: Object.keys(entry).length === 0 ? null : entry },
+  };
+}
+
+/**
+ * The form for "Override for project", starting from the environment config.
+ * Stored secrets belong to the environment entry and cannot be copied, so those
+ * rows come back empty for the user to enter again.
+ */
+export function overrideDraftFromEnvironment(
+  name: string,
+  config: McpServerConfig,
+): McpServerDraft {
+  const draft = draftFromConfig(name, { ...config, enabled: true });
+  const cleared = (rows: ReadonlyArray<McpEnvDraftRow>) =>
+    rows.map((row) => (row.redacted ? { ...row, value: "", redacted: false } : row));
+  return { ...draft, env: cleared(draft.env), headers: cleared(draft.headers) };
+}
+
+/**
+ * The check a project row shows: its own for a project config, the
+ * environment's for an inherited server.
+ */
+export function selectProjectMcpCheck(
+  config: Parameters<typeof selectMcpServerCheck>[0],
+  projectId: string,
+  name: string,
+  source: "global" | "override" | "project",
+): McpServerCheck | undefined {
+  return selectMcpServerCheck(config, source === "global" ? "global" : projectId, name);
 }

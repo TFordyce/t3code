@@ -17,7 +17,12 @@ import {
   TrimmedNonEmptyString,
   TrimmedString,
 } from "./baseSchemas.ts";
-import { McpServerConfig, McpServerRecord, StoredMcpServers } from "./mcpServers.ts";
+import {
+  McpServerConfig,
+  McpServerOverride,
+  McpServerRecord,
+  StoredMcpServers,
+} from "./mcpServers.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
@@ -1000,7 +1005,7 @@ export type ProjectScopedServerSettingKey = (typeof PROJECT_SCOPED_SERVER_SETTIN
  * `null` is a real value where the environment type is nullable (no default
  * model, no dedicated writer model, never auto-settle).
  */
-export const ProjectSettingsOverrides = Schema.Struct({
+const ProjectScopedOverrideFields = {
   worktreeCleanup: Schema.optionalKey(WorktreeCleanup),
   defaultModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   defaultRuntimeMode: Schema.optionalKey(RuntimeMode),
@@ -1023,7 +1028,16 @@ export const ProjectSettingsOverrides = Schema.Struct({
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
-} satisfies Record<ProjectScopedServerSettingKey, unknown>);
+} satisfies Record<ProjectScopedServerSettingKey, unknown>;
+
+export const ProjectSettingsOverrides = Schema.Struct({
+  ...ProjectScopedOverrideFields,
+  /**
+   * MCP servers this project adds, overrides or turns off, merged per name
+   * with `ServerSettings.mcpServers`. Not one of the whole-value scoped keys.
+   */
+  mcpServers: Schema.optionalKey(McpServerRecord(McpServerOverride)),
+});
 export type ProjectSettingsOverrides = typeof ProjectSettingsOverrides.Type;
 
 /**

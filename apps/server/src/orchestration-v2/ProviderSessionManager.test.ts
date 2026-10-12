@@ -12,6 +12,7 @@ import {
   type OrchestrationV2ProviderThread,
   type Project,
   ProjectId,
+  type ProjectSettingsOverrides,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderSessionId,
@@ -4690,9 +4691,15 @@ const userHttp = (
   }> = [],
 ) => ({ transport: "http", url, headers }) as const;
 
+const userMcpProjectA = ProjectId.make("project-user-mcp-a");
+const userMcpProjectB = ProjectId.make("project-user-mcp-b");
+
 function runUserMcpScenario<A>(input: {
   readonly mcpServers: Record<string, ReturnType<typeof userStdio> | ReturnType<typeof userHttp>>;
   readonly configureMcp?: boolean;
+  /** MCP overrides of project A; the thread is in A unless `threadInProjectB`. */
+  readonly projectMcpServers?: NonNullable<ProjectSettingsOverrides["mcpServers"]>;
+  readonly threadInProjectB?: boolean;
   readonly use: (context: {
     readonly open: Effect.Effect<void>;
     readonly detach: Effect.Effect<void>;
@@ -4713,7 +4720,14 @@ function runUserMcpScenario<A>(input: {
         threadId,
       });
       yield* eventSink.write({
-        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        events: [
+          yield* makeThreadCreatedEvent({
+            idAllocator,
+            threadId,
+            now,
+            projectId: input.threadInProjectB === true ? userMcpProjectB : userMcpProjectA,
+          }),
+        ],
       });
       const openSession = manager
         .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
@@ -4731,12 +4745,73 @@ function runUserMcpScenario<A>(input: {
           state,
           idleTimeoutMs: 1_000,
           ...(input.configureMcp === undefined ? {} : { configureMcp: input.configureMcp }),
-          serverSettingsLayer: ServerSettings.layerTest({ mcpServers: input.mcpServers }),
+          serverSettingsLayer: ServerSettings.layerTest({
+            mcpServers: input.mcpServers,
+            ...(input.projectMcpServers === undefined
+              ? {}
+              : {
+                  projectSettingsOverrides: {
+                    [userMcpProjectA]: { mcpServers: input.projectMcpServers },
+                  },
+                }),
+          }),
         }),
       ),
     );
   });
 }
+
+const projectScenarioServers = {
+  mcpServers: { shared: userStdio("shared-mcp"), noisy: userStdio("noisy-mcp") },
+  projectMcpServers: {
+    "only-a": userStdio("only-a-mcp"),
+    noisy: { enabled: false },
+    shared: userStdio("shared-a-mcp"),
+  },
+} as const;
+
+it.effect("ProviderSessionManagerV2 gives a project's session its own effective MCP servers", () =>
+  runUserMcpScenario({
+    ...projectScenarioServers,
+    use: ({ open, slot }) =>
+      Effect.gen(function* () {
+        yield* open;
+        const servers = (yield* slot)?.userMcp?.servers ?? [];
+        assert.deepStrictEqual(
+          servers.map((server) => [
+            server.name,
+            server.transport === "stdio" ? server.command : "",
+          ]),
+          [
+            ["only-a", "only-a-mcp"],
+            ["shared", "shared-a-mcp"],
+          ],
+        );
+      }),
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 keeps one project's MCP overrides out of other projects", () =>
+  runUserMcpScenario({
+    ...projectScenarioServers,
+    threadInProjectB: true,
+    use: ({ open, slot }) =>
+      Effect.gen(function* () {
+        yield* open;
+        const servers = (yield* slot)?.userMcp?.servers ?? [];
+        assert.deepStrictEqual(
+          servers.map((server) => [
+            server.name,
+            server.transport === "stdio" ? server.command : "",
+          ]),
+          [
+            ["noisy", "noisy-mcp"],
+            ["shared", "shared-mcp"],
+          ],
+        );
+      }),
+  }),
+);
 
 it.effect("ProviderSessionManagerV2 puts the resolved user MCP servers in the session slot", () =>
   runUserMcpScenario({

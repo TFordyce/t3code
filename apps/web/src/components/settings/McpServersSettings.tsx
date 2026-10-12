@@ -1,8 +1,9 @@
 /**
  * Settings → MCP servers. Lists the user MCP servers an environment hands to
  * every provider session, beside the built-in `t3-code` one, and edits them in
- * place. Secret env values are stored on the host; this page only ever sees a
- * "stored securely" marker for them.
+ * place. At project scope it shows the project's own servers and overrides
+ * above the environment servers it inherits. Secret env values are stored on
+ * the host; this page only ever sees a "stored securely" marker for them.
  *
  * @module McpServersSettings
  */
@@ -10,6 +11,8 @@ import type {
   EnvironmentId,
   McpServerCheck,
   McpServerConfig,
+  McpServerOverride,
+  ProjectId,
   ServerProvider,
   ServerSettingsPatch,
 } from "@t3tools/contracts";
@@ -19,7 +22,7 @@ import {
   selectMcpServerCheck,
 } from "@t3tools/client-runtime/state/mcp-server-checks";
 import { LockIcon, LockOpenIcon, PlusIcon, XIcon } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
@@ -44,9 +47,14 @@ import {
   configFromDraft,
   draftFromConfig,
   emptyDraft,
+  overrideDraftFromEnvironment,
+  projectMcpPatch,
+  projectMcpRows,
   providersWithoutMcpSupport,
+  selectProjectMcpCheck,
   urlQueryTokenWarning,
   validateDraft,
+  type InheritedMcpRow,
   type McpEnvDraftRow,
   type McpServerDraft,
 } from "./McpServersSettings.logic";
@@ -59,7 +67,7 @@ import { useSettingsScope } from "./SettingsScopeContext";
 const APPROVAL_NOTE = "Tool calls go through each provider's normal approval.";
 
 export function McpServersSettingsPanel() {
-  const { environment, scope } = useSettingsScope();
+  const { environment, scope, target } = useSettingsScope();
   if (environment === null) {
     return (
       <SettingsScopeNotice target="environment">
@@ -73,6 +81,11 @@ export function McpServersSettingsPanel() {
       environmentId={environment.environmentId}
       environmentLabel={environment.label}
       projectScoped={scope.kind === "project" || scope.kind === "checkout"}
+      projectId={
+        target?.projectId != null && target.environmentId === environment.environmentId
+          ? target.projectId
+          : null
+      }
     />
   );
 }
@@ -81,16 +94,25 @@ function McpServersEnvironmentPanel({
   environmentId,
   environmentLabel,
   projectScoped,
+  projectId,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   readonly projectScoped: boolean;
+  readonly projectId: ProjectId | null;
 }) {
   const servers = useEnvironmentSettings(environmentId, (settings) => settings.mcpServers);
+  const projectOverrides = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.projectSettingsOverrides,
+  );
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
   const canManage = useAtomValue(
-    serverEnvironment.updateSettings.permissionAtom(environmentId, { patch: { mcpServers: {} } }),
+    serverEnvironment.updateSettings.permissionAtom(environmentId, {
+      patch:
+        projectId === null ? { mcpServers: {} } : { mcpServers: {}, projectSettingsOverrides: {} },
+    }),
   );
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "update MCP servers",
@@ -103,6 +125,13 @@ function McpServersEnvironmentPanel({
   const [adding, setAdding] = useState(false);
   const [noticeVisible, setNoticeVisible] = useState(false);
   const names = Object.keys(servers).toSorted();
+  const rows =
+    projectId === null
+      ? null
+      : projectMcpRows(
+          { mcpServers: servers, projectSettingsOverrides: projectOverrides },
+          projectId,
+        );
 
   /** Resolves true when the server accepted the change. */
   const save = async (name: string, config: McpServerConfig | null) => {
@@ -112,6 +141,129 @@ function McpServersEnvironmentPanel({
     setNoticeVisible(true);
     return true;
   };
+
+  /** Writes one entry of the project's MCP overrides; null removes it. */
+  const saveProject = async (name: string, value: McpServerOverride | null) => {
+    if (projectId === null) return false;
+    const patch: ServerSettingsPatch = projectMcpPatch(
+      { projectSettingsOverrides: projectOverrides },
+      projectId,
+      name,
+      value,
+    );
+    const result = await updateSettings({ environmentId, input: { patch } });
+    if (result._tag !== "Success") return false;
+    setNoticeVisible(true);
+    return true;
+  };
+
+  if (projectId !== null && rows !== null) {
+    const allNames = [...new Set([...names, ...rows.project.map((row) => row.name)])];
+    return (
+      <SettingsPageContainer>
+        {noticeVisible ? (
+          <Alert variant="success">
+            <AlertDescription>Applies to new sessions in this project.</AlertDescription>
+            <AlertAction>
+              <Button size="xs" variant="ghost" onClick={() => setNoticeVisible(false)}>
+                Dismiss
+              </Button>
+            </AlertAction>
+          </Alert>
+        ) : null}
+        <SettingsSection
+          {...searchableSetting("mcp-servers")}
+          headerAction={
+            canManage ? (
+              <Button size="xs" variant="outline" disabled={adding} onClick={() => setAdding(true)}>
+                <PlusIcon aria-hidden />
+                Add server
+              </Button>
+            ) : null
+          }
+        >
+          <h3 className="px-3 text-xs font-medium text-muted-foreground sm:px-4">This project</h3>
+          <SettingsGroup>
+            {adding ? (
+              <div className="px-3 py-3 sm:px-4">
+                <McpServerForm
+                  isNew
+                  initial={emptyDraft()}
+                  existingNames={allNames}
+                  providers={providers}
+                  onCancel={() => setAdding(false)}
+                  onSave={async (draft) => {
+                    if (await saveProject(draft.name, configFromDraft(draft))) setAdding(false);
+                  }}
+                />
+              </div>
+            ) : null}
+            {rows.project.map((row) => (
+              <McpServerRow
+                key={row.name}
+                name={row.name}
+                config={row.config}
+                existingNames={allNames}
+                providers={providers}
+                badge={
+                  <Badge variant="secondary">
+                    {row.kind === "override" ? "Overridden" : "Project"}
+                  </Badge>
+                }
+                check={selectProjectMcpCheck(serverConfig, projectId, row.name, row.kind)}
+                environmentLabel={environmentLabel}
+                canCheck={canCheck}
+                onCheck={() =>
+                  void checkServers({
+                    environmentId,
+                    input: { targets: [{ scope: projectId, name: row.name }] },
+                  })
+                }
+                readOnly={!canManage}
+                onSave={(next) => saveProject(row.name, next)}
+                onRemove={row.kind === "project" ? () => saveProject(row.name, null) : undefined}
+                onUseEnvironmentConfig={
+                  row.kind === "override" ? () => saveProject(row.name, null) : undefined
+                }
+              />
+            ))}
+          </SettingsGroup>
+          {rows.project.length === 0 && !adding ? (
+            <p className="px-3 text-sm text-muted-foreground sm:px-4">
+              This project has no servers of its own. Add one, or override or turn off an
+              environment server below.
+            </p>
+          ) : null}
+          <h3 className="px-3 pt-2 text-xs font-medium text-muted-foreground sm:px-4">
+            From {environmentLabel}
+          </h3>
+          <SettingsGroup>
+            <div className="flex items-center justify-between gap-3 px-3 py-3 sm:px-4">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground">t3-code</p>
+                <p className="text-xs text-muted-foreground">T3 Code tools · auto-approved</p>
+              </div>
+              <Badge variant="secondary">Built in</Badge>
+            </div>
+            {rows.inherited.map((row) => (
+              <InheritedMcpServerRow
+                key={row.name}
+                row={row}
+                existingNames={allNames}
+                providers={providers}
+                check={selectProjectMcpCheck(serverConfig, projectId, row.name, "global")}
+                environmentLabel={environmentLabel}
+                readOnly={!canManage}
+                onTurnOff={(off) => saveProject(row.name, off ? { enabled: false } : null)}
+                onOverride={(config) => saveProject(row.name, config)}
+              />
+            ))}
+          </SettingsGroup>
+          <p className="px-3 text-xs text-muted-foreground sm:px-4">{APPROVAL_NOTE}</p>
+        </SettingsSection>
+      </SettingsPageContainer>
+    );
+  }
 
   return (
     <SettingsPageContainer>
@@ -214,9 +366,14 @@ function McpServerRow({
   readOnly,
   onSave,
   onRemove,
+  badge,
+  onUseEnvironmentConfig,
 }: {
   readonly name: string;
   readonly config: McpServerConfig;
+  readonly badge?: ReactNode;
+  /** Present on a project override: drops it so the environment config applies again. */
+  readonly onUseEnvironmentConfig?: (() => Promise<boolean>) | undefined;
   readonly existingNames: ReadonlyArray<string>;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly check: McpServerCheck | undefined;
@@ -225,7 +382,7 @@ function McpServerRow({
   readonly onCheck: () => void;
   readonly readOnly: boolean;
   readonly onSave: (config: McpServerConfig) => Promise<boolean>;
-  readonly onRemove: () => Promise<boolean>;
+  readonly onRemove?: (() => Promise<boolean>) | undefined;
 }) {
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -235,7 +392,10 @@ function McpServerRow({
     <div className="px-3 py-3 sm:px-4">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-foreground">{name}</p>
+          <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <span className="truncate">{name}</span>
+            {badge}
+          </p>
           <p className="truncate font-mono text-xs text-muted-foreground">
             {config.transport === "http" ? config.url : [config.command, ...config.args].join(" ")}
           </p>
@@ -255,6 +415,11 @@ function McpServerRow({
               onClick={onCheck}
             >
               Re-check
+            </Button>
+          ) : null}
+          {!readOnly && onUseEnvironmentConfig ? (
+            <Button size="xs" variant="ghost" onClick={() => void onUseEnvironmentConfig()}>
+              Use environment config
             </Button>
           ) : null}
           {!readOnly ? (
@@ -286,11 +451,11 @@ function McpServerRow({
             onSave={async (draft) => {
               if (await onSave(configFromDraft(draft))) setEditing(false);
             }}
-            onRemove={() => setRemoving(true)}
+            {...(onRemove ? { onRemove: () => setRemoving(true) } : {})}
           />
         </div>
       ) : null}
-      <AlertDialog open={removing} onOpenChange={setRemoving}>
+      <AlertDialog open={removing && onRemove !== undefined} onOpenChange={setRemoving}>
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {name}?</AlertDialogTitle>
@@ -305,7 +470,7 @@ function McpServerRow({
               variant="destructive"
               onClick={() => {
                 setRemoving(false);
-                void onRemove();
+                void onRemove?.();
               }}
             >
               Remove server
@@ -317,16 +482,92 @@ function McpServerRow({
   );
 }
 
+/** An environment server as a project sees it: switch it off for the project, or override it. */
+function InheritedMcpServerRow({
+  row,
+  existingNames,
+  providers,
+  check,
+  environmentLabel,
+  readOnly,
+  onTurnOff,
+  onOverride,
+}: {
+  readonly row: InheritedMcpRow;
+  readonly existingNames: ReadonlyArray<string>;
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly check: McpServerCheck | undefined;
+  readonly environmentLabel: string;
+  readonly readOnly: boolean;
+  readonly onTurnOff: (off: boolean) => Promise<boolean>;
+  readonly onOverride: (config: McpServerConfig) => Promise<boolean>;
+}) {
+  const [overriding, setOverriding] = useState(false);
+  const { name, config } = row;
+  return (
+    <div className="px-3 py-3 sm:px-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-foreground">{name}</p>
+          <p className="truncate font-mono text-xs text-muted-foreground">
+            {config.transport === "http" ? config.url : [config.command, ...config.args].join(" ")}
+          </p>
+          <p className="truncate text-xs text-muted-foreground">
+            {row.offOnEnvironment
+              ? "Off on environment"
+              : `${describeMcpServerCheck(check)}${check === undefined ? "" : ` · checked on ${environmentLabel}`}`}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {!readOnly && !row.offOnEnvironment ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              aria-expanded={overriding}
+              onClick={() => setOverriding((open) => !open)}
+            >
+              {overriding ? "Close" : "Override for project"}
+            </Button>
+          ) : null}
+          <Switch
+            aria-label={`${name} enabled for this project`}
+            checked={!row.offOnEnvironment && !row.offForProject}
+            disabled={readOnly || row.offOnEnvironment}
+            onCheckedChange={(next) => void onTurnOff(!next)}
+          />
+        </div>
+      </div>
+      {overriding && !readOnly ? (
+        <div className="pt-3">
+          <McpServerForm
+            isNew={false}
+            initial={overrideDraftFromEnvironment(name, config)}
+            existingNames={existingNames}
+            providers={providers}
+            note="Secrets stored for the environment are not copied. Enter any this project needs again."
+            onCancel={() => setOverriding(false)}
+            onSave={async (draft) => {
+              if (await onOverride(configFromDraft(draft))) setOverriding(false);
+            }}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** In-place editor. The name is only editable until the server is first saved. */
 function McpServerForm({
   isNew,
   initial,
   existingNames,
   providers,
+  note,
   onCancel,
   onSave,
   onRemove,
 }: {
+  readonly note?: string;
   readonly isNew: boolean;
   readonly initial: McpServerDraft;
   readonly existingNames: ReadonlyArray<string>;
@@ -453,6 +694,7 @@ function McpServerForm({
       {unsupported.length > 0 ? (
         <p className="text-xs text-muted-foreground">Not available in {unsupported.join(", ")}.</p>
       ) : null}
+      {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
       <p className="text-xs text-muted-foreground">{APPROVAL_NOTE}</p>
       <div className="flex items-center justify-between gap-2">
         <div>
