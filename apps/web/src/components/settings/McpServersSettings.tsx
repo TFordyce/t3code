@@ -8,11 +8,16 @@
  */
 import type {
   EnvironmentId,
+  McpServerCheck,
   McpServerConfig,
   ServerProvider,
   ServerSettingsPatch,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import {
+  describeMcpServerCheck,
+  selectMcpServerCheck,
+} from "@t3tools/client-runtime/state/mcp-server-checks";
 import { LockIcon, LockOpenIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -90,6 +95,11 @@ function McpServersEnvironmentPanel({
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "update MCP servers",
   });
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const canCheck = useAtomValue(serverEnvironment.checkMcpServers.permissionAtom(environmentId));
+  const checkServers = useAtomCommand(serverEnvironment.checkMcpServers, {
+    label: "check MCP servers",
+  });
   const [adding, setAdding] = useState(false);
   const [noticeVisible, setNoticeVisible] = useState(false);
   const names = Object.keys(servers).toSorted();
@@ -165,6 +175,15 @@ function McpServersEnvironmentPanel({
                 config={config}
                 existingNames={names}
                 providers={providers}
+                check={selectMcpServerCheck(serverConfig, "global", name)}
+                environmentLabel={environmentLabel}
+                canCheck={canCheck}
+                onCheck={() =>
+                  void checkServers({
+                    environmentId,
+                    input: { targets: [{ scope: "global", name }] },
+                  })
+                }
                 readOnly={!canManage}
                 onSave={(next) => save(name, next)}
                 onRemove={() => save(name, null)}
@@ -188,6 +207,10 @@ function McpServerRow({
   config,
   existingNames,
   providers,
+  check,
+  environmentLabel,
+  canCheck,
+  onCheck,
   readOnly,
   onSave,
   onRemove,
@@ -196,6 +219,10 @@ function McpServerRow({
   readonly config: McpServerConfig;
   readonly existingNames: ReadonlyArray<string>;
   readonly providers: ReadonlyArray<ServerProvider>;
+  readonly check: McpServerCheck | undefined;
+  readonly environmentLabel: string;
+  readonly canCheck: boolean;
+  readonly onCheck: () => void;
   readonly readOnly: boolean;
   readonly onSave: (config: McpServerConfig) => Promise<boolean>;
   readonly onRemove: () => Promise<boolean>;
@@ -212,8 +239,24 @@ function McpServerRow({
           <p className="truncate font-mono text-xs text-muted-foreground">
             {config.transport === "http" ? config.url : [config.command, ...config.args].join(" ")}
           </p>
+          {enabled ? (
+            <p className="truncate text-xs text-muted-foreground">
+              {describeMcpServerCheck(check)}
+              {check === undefined ? null : ` · checked on ${environmentLabel}`}
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {enabled && canCheck ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={check?.status === "checking"}
+              onClick={onCheck}
+            >
+              Re-check
+            </Button>
+          ) : null}
           {!readOnly ? (
             <Button
               size="xs"

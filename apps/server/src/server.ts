@@ -59,6 +59,7 @@ import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceR
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpProxy from "./mcp/McpProxy.ts";
+import * as McpServerChecks from "./mcp/McpServerChecks.ts";
 import * as McpUpstream from "./mcp/McpUpstream.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -627,6 +628,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
       ProviderLatestVersions.layer,
       McpProviderSessions.layer,
       McpUpstream.layer,
+      McpServerChecks.layer.pipe(Layer.provide(McpUpstream.layer)),
     ),
   ),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old

@@ -131,3 +131,11 @@ describe("client permission for mcpServers patches", () => {
     expect(clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, undefined)).toEqual([]);
   });
 });
+
+describe("server checks", () => {
+  it("guards a re-check with providers-manage", () => {
+    expect(clientRpcRequiredScopes(WS_METHODS.serverCheckMcpServers, {})).toEqual([
+      AuthProvidersManageScope,
+    ]);
+  });
+});
