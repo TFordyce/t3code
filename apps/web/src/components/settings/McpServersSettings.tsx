@@ -34,11 +34,13 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   configFromDraft,
   draftFromConfig,
   emptyDraft,
   providersWithoutMcpSupport,
+  urlQueryTokenWarning,
   validateDraft,
   type McpEnvDraftRow,
   type McpServerDraft,
@@ -208,7 +210,7 @@ function McpServerRow({
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-foreground">{name}</p>
           <p className="truncate font-mono text-xs text-muted-foreground">
-            {[config.command, ...config.args].join(" ")}
+            {config.transport === "http" ? config.url : [config.command, ...config.args].join(" ")}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -295,12 +297,9 @@ function McpServerForm({
   const [touched, setTouched] = useState(false);
   const errors = validateDraft(draft, { existingNames, isNew });
   const hasErrors = Object.keys(errors).length > 0;
-  const unsupported = providersWithoutMcpSupport(providers, "stdio");
-  const setEnvRow = (index: number, row: McpEnvDraftRow) =>
-    setDraft((current) => ({
-      ...current,
-      env: current.env.map((existing, at) => (at === index ? row : existing)),
-    }));
+  const unsupported = providersWithoutMcpSupport(providers, draft.transport);
+  const queryTokenWarning =
+    draft.transport === "http" ? urlQueryTokenWarning(draft.url) : undefined;
 
   return (
     <form
@@ -326,96 +325,88 @@ function McpServerForm({
         />
         {touched && errors.name ? <FieldError>{errors.name}</FieldError> : null}
       </label>
-      <label className="block space-y-1">
-        <span className="text-xs font-medium text-foreground">Command</span>
-        <Input
-          aria-label="Command"
-          aria-invalid={touched && errors.command !== undefined}
-          font="mono"
-          autoCapitalize="none"
-          spellCheck={false}
-          placeholder="npx"
-          value={draft.command}
-          onChange={(event) => setDraft({ ...draft, command: event.target.value })}
-        />
-        {touched && errors.command ? <FieldError>{errors.command}</FieldError> : null}
-      </label>
-      <label className="block space-y-1">
-        <span className="text-xs font-medium text-foreground">Arguments, one per line</span>
-        <Textarea
-          aria-label="Arguments"
-          spellCheck={false}
-          placeholder={"-y\n@modelcontextprotocol/server-github"}
-          value={draft.args}
-          onChange={(event) => setDraft({ ...draft, args: event.target.value })}
-        />
-      </label>
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-foreground">Environment variables</span>
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            onClick={() =>
-              setDraft({
-                ...draft,
-                env: [...draft.env, { name: "", value: "", sensitive: false, redacted: false }],
-              })
-            }
-          >
-            <PlusIcon aria-hidden />
-            Add variable
-          </Button>
-        </div>
-        {draft.env.map((row, index) => (
-          <div key={index} className="flex items-center gap-2">
+      {isNew ? (
+        <ToggleGroup
+          aria-label="Transport"
+          variant="segmented"
+          value={[draft.transport]}
+          onValueChange={(next) => {
+            const transport = next[0];
+            if (transport === "stdio" || transport === "http") setDraft({ ...draft, transport });
+          }}
+        >
+          <Toggle value="stdio">Command</Toggle>
+          <Toggle value="http">HTTP</Toggle>
+        </ToggleGroup>
+      ) : null}
+      {draft.transport === "http" ? (
+        <>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-foreground">URL</span>
             <Input
-              aria-label="Variable name"
+              aria-label="URL"
+              aria-invalid={touched && errors.url !== undefined}
               font="mono"
               autoCapitalize="none"
               spellCheck={false}
-              placeholder="NAME"
-              value={row.name}
-              onChange={(event) => setEnvRow(index, { ...row, name: event.target.value })}
+              placeholder="https://mcp.example.com/mcp"
+              value={draft.url}
+              onChange={(event) => setDraft({ ...draft, url: event.target.value })}
             />
+            {touched && errors.url ? <FieldError>{errors.url}</FieldError> : null}
+            {queryTokenWarning ? (
+              <p role="status" className="text-xs text-warning-foreground">
+                {queryTokenWarning}
+              </p>
+            ) : null}
+          </label>
+          <SecretRows
+            title="Headers"
+            addLabel="Add header"
+            noun="header"
+            namePlaceholder="Authorization"
+            rows={draft.headers}
+            error={touched ? errors.headers : undefined}
+            onChange={(headers) => setDraft((current) => ({ ...current, headers }))}
+          />
+        </>
+      ) : (
+        <>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-foreground">Command</span>
             <Input
-              aria-label="Variable value"
+              aria-label="Command"
+              aria-invalid={touched && errors.command !== undefined}
               font="mono"
-              autoComplete="off"
+              autoCapitalize="none"
               spellCheck={false}
-              type={row.sensitive ? "password" : "text"}
-              placeholder={row.redacted ? "Stored securely" : "value"}
-              value={row.value}
-              onChange={(event) =>
-                setEnvRow(index, { ...row, value: event.target.value, redacted: false })
-              }
+              placeholder="npx"
+              value={draft.command}
+              onChange={(event) => setDraft({ ...draft, command: event.target.value })}
             />
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              aria-label={row.sensitive ? "Sensitive: stored securely" : "Mark as sensitive"}
-              aria-pressed={row.sensitive}
-              // A stored secret stays sensitive until it is replaced.
-              disabled={row.redacted}
-              onClick={() => setEnvRow(index, { ...row, sensitive: !row.sensitive })}
-            >
-              {row.sensitive ? <LockIcon aria-hidden /> : <LockOpenIcon aria-hidden />}
-            </Button>
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Remove variable"
-              onClick={() => setDraft({ ...draft, env: draft.env.filter((_, at) => at !== index) })}
-            >
-              <XIcon aria-hidden />
-            </Button>
-          </div>
-        ))}
-        {touched && errors.env ? <FieldError>{errors.env}</FieldError> : null}
-      </div>
+            {touched && errors.command ? <FieldError>{errors.command}</FieldError> : null}
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-foreground">Arguments, one per line</span>
+            <Textarea
+              aria-label="Arguments"
+              spellCheck={false}
+              placeholder={"-y\n@modelcontextprotocol/server-github"}
+              value={draft.args}
+              onChange={(event) => setDraft({ ...draft, args: event.target.value })}
+            />
+          </label>
+          <SecretRows
+            title="Environment variables"
+            addLabel="Add variable"
+            noun="variable"
+            namePlaceholder="NAME"
+            rows={draft.env}
+            error={touched ? errors.env : undefined}
+            onChange={(env) => setDraft((current) => ({ ...current, env }))}
+          />
+        </>
+      )}
       {unsupported.length > 0 ? (
         <p className="text-xs text-muted-foreground">Not available in {unsupported.join(", ")}.</p>
       ) : null}
@@ -438,6 +429,93 @@ function McpServerForm({
         </div>
       </div>
     </form>
+  );
+}
+
+/** Name/value rows where a value can be marked sensitive: env variables and HTTP headers. */
+function SecretRows({
+  title,
+  addLabel,
+  noun,
+  namePlaceholder,
+  rows,
+  error,
+  onChange,
+}: {
+  readonly title: string;
+  readonly addLabel: string;
+  readonly noun: string;
+  readonly namePlaceholder: string;
+  readonly rows: ReadonlyArray<McpEnvDraftRow>;
+  readonly error: string | undefined;
+  readonly onChange: (rows: ReadonlyArray<McpEnvDraftRow>) => void;
+}) {
+  const setRow = (index: number, row: McpEnvDraftRow) =>
+    onChange(rows.map((existing, at) => (at === index ? row : existing)));
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-foreground">{title}</span>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          onClick={() =>
+            onChange([...rows, { name: "", value: "", sensitive: false, redacted: false }])
+          }
+        >
+          <PlusIcon aria-hidden />
+          {addLabel}
+        </Button>
+      </div>
+      {rows.map((row, index) => (
+        <div key={index} className="flex items-center gap-2">
+          <Input
+            aria-label={`${noun} name`}
+            font="mono"
+            autoCapitalize="none"
+            spellCheck={false}
+            placeholder={namePlaceholder}
+            value={row.name}
+            onChange={(event) => setRow(index, { ...row, name: event.target.value })}
+          />
+          <Input
+            aria-label={`${noun} value`}
+            font="mono"
+            autoComplete="off"
+            spellCheck={false}
+            type={row.sensitive ? "password" : "text"}
+            placeholder={row.redacted ? "Stored securely" : "value"}
+            value={row.value}
+            onChange={(event) =>
+              setRow(index, { ...row, value: event.target.value, redacted: false })
+            }
+          />
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={row.sensitive ? "Sensitive: stored securely" : "Mark as sensitive"}
+            aria-pressed={row.sensitive}
+            // A stored secret stays sensitive until it is replaced.
+            disabled={row.redacted}
+            onClick={() => setRow(index, { ...row, sensitive: !row.sensitive })}
+          >
+            {row.sensitive ? <LockIcon aria-hidden /> : <LockOpenIcon aria-hidden />}
+          </Button>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`Remove ${noun}`}
+            onClick={() => onChange(rows.filter((_, at) => at !== index))}
+          >
+            <XIcon aria-hidden />
+          </Button>
+        </div>
+      ))}
+      {error ? <FieldError>{error}</FieldError> : null}
+    </div>
   );
 }
 

@@ -4680,8 +4680,18 @@ const userStdio = (
     ...(extra.enabled === undefined ? {} : { enabled: extra.enabled }),
   }) as const;
 
+const userHttp = (
+  url: string,
+  headers: ReadonlyArray<{
+    readonly name: string;
+    readonly value: string;
+    readonly sensitive: boolean;
+    readonly valueRedacted?: boolean;
+  }> = [],
+) => ({ transport: "http", url, headers }) as const;
+
 function runUserMcpScenario<A>(input: {
-  readonly mcpServers: Record<string, ReturnType<typeof userStdio>>;
+  readonly mcpServers: Record<string, ReturnType<typeof userStdio> | ReturnType<typeof userHttp>>;
   readonly configureMcp?: boolean;
   readonly use: (context: {
     readonly open: Effect.Effect<void>;
@@ -4756,6 +4766,41 @@ it.effect("ProviderSessionManagerV2 puts the resolved user MCP servers in the se
         });
       }),
   }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 gives HTTP user MCP servers only the loopback proxy address",
+  () =>
+    runUserMcpScenario({
+      mcpServers: {
+        docs: userHttp("https://mcp.example.com/mcp?x=1", [
+          {
+            name: "Authorization",
+            value: "Bearer upstream-secret",
+            sensitive: true,
+            valueRedacted: true,
+          },
+        ]),
+        lost: userHttp("https://mcp.example.com/lost", [
+          { name: "Authorization", value: "", sensitive: true, valueRedacted: true },
+        ]),
+      },
+      use: ({ open, slot }) =>
+        Effect.gen(function* () {
+          yield* open;
+          const config = yield* slot;
+          const docs = config?.userMcp?.servers.find((server) => server.name === "docs");
+          assert.equal(docs?.transport, "http");
+          const origin = new URL(config!.endpoint).origin;
+          assert.equal(docs?.transport === "http" ? docs.url : "", `${origin}/mcp-proxy/docs`);
+          const serialized = JSON.stringify(config?.userMcp);
+          assert.notInclude(serialized, "upstream-secret");
+          assert.notInclude(serialized, "mcp.example.com");
+          assert.deepStrictEqual(config?.userMcp?.skipped, [
+            { name: "lost", reason: "secret-unavailable" },
+          ]);
+        }),
+    }),
 );
 
 it.effect("ProviderSessionManagerV2 skips a user MCP server whose secret is unavailable", () =>

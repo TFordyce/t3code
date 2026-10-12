@@ -262,7 +262,7 @@ export const CodexProviderCapabilitiesV2 = {
     emitsToolCompleted: true,
     emitsToolOutput: true,
     supportsMcpTools: true,
-    userMcpTransports: ["stdio"],
+    userMcpTransports: ["stdio", "http"],
     supportsDynamicToolCallbacks: true,
   },
   approvals: {
@@ -1329,7 +1329,12 @@ export function codexThreadRuntimeParams(input: {
                   CodexProviderCapabilitiesV2.tools.userMcpTransports,
                 ).map((server) => [
                   server.name,
-                  { command: server.command, args: [...server.args], env: { ...server.env } },
+                  server.transport === "http"
+                    ? {
+                        url: server.url,
+                        http_headers: { Authorization: mcpSession.authorizationHeader },
+                      }
+                    : { command: server.command, args: [...server.args], env: { ...server.env } },
                 ]),
               ),
             },

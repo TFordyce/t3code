@@ -72,6 +72,47 @@ describe("ServerSettingsPatch mcpServers", () => {
   });
 });
 
+describe("http MCP server config", () => {
+  it("decodes an http server with defaults and header rows", () => {
+    const settings = decodeServerSettings({
+      mcpServers: {
+        docs: {
+          transport: "http",
+          url: "https://mcp.example.com/mcp",
+          headers: [{ name: "X-Api-Key", value: "k", sensitive: true }],
+        },
+        bare: { transport: "http", url: "https://mcp.example.com/bare" },
+      },
+    });
+    expect(settings.mcpServers.docs).toEqual({
+      transport: "http",
+      url: "https://mcp.example.com/mcp",
+      headers: [{ name: "X-Api-Key", value: "k", sensitive: true }],
+    });
+    expect(settings.mcpServers.bare).toEqual({
+      transport: "http",
+      url: "https://mcp.example.com/bare",
+      headers: [],
+    });
+  });
+
+  it("drops http entries with a bad header name or a non-http url", () => {
+    const settings = decodeServerSettings({
+      mcpServers: {
+        ok: { transport: "http", url: "https://a.example/mcp" },
+        spaced: {
+          transport: "http",
+          url: "https://a.example/mcp",
+          headers: [{ name: "Bad Header", value: "x" }],
+        },
+        ftp: { transport: "http", url: "ftp://a.example/mcp" },
+        junk: { transport: "http", url: "not a url" },
+      },
+    });
+    expect(Object.keys(settings.mcpServers)).toEqual(["ok"]);
+  });
+});
+
 describe("client permission for mcpServers patches", () => {
   it("guards a settings update that changes MCP servers with providers-manage", () => {
     expect(

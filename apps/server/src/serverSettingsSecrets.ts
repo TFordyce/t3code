@@ -14,6 +14,7 @@
  * @module serverSettingsSecrets
  */
 import type {
+  McpServerHeader,
   ProviderInstanceConfig,
   ProviderInstanceEnvironmentVariable,
   ServerSettings,
@@ -82,11 +83,11 @@ const markerValue = (next: SecretValue): string =>
   next.redacted && !next.resolved ? SECRET_REDACTED : next.value;
 
 /** An env row rebuilt from what a kind's visitor answered for it. */
-const applySecretValue = (
-  variable: ProviderInstanceEnvironmentVariable,
+const applySecretValue = <Row extends ProviderInstanceEnvironmentVariable | McpServerHeader>(
+  variable: Row,
   entry: SecretEntry,
   next: SecretValue,
-): ProviderInstanceEnvironmentVariable => {
+): Row => {
   if (next.redacted === entry.redacted && next.value === entry.value) return variable;
   const { valueRedacted: _omit, ...rest } = variable;
   return {
@@ -174,11 +175,43 @@ const gitHubKind: SecretKind = {
   },
 };
 
+/** Sensitive header values of user HTTP MCP servers, keyed by scope, server and header. */
+const mcpServerHeaderKind: SecretKind = {
+  map: (settings, visit) => {
+    const mcpServers: Record<string, ServerSettings["mcpServers"][string]> = {};
+    for (const [name, server] of Object.entries(settings.mcpServers)) {
+      if (server.transport !== "http") {
+        mcpServers[name] = server;
+        continue;
+      }
+      const headers: McpServerHeader[] = [];
+      for (const header of server.headers) {
+        const entry: SecretEntry = {
+          key: `mcp-header-${encodeSecretName("global")}-${encodeSecretName(name)}-${encodeSecretName(header.name)}`,
+          sensitive: header.sensitive,
+          redacted: header.valueRedacted === true,
+          value: header.value,
+          context: { environmentVariable: header.name },
+        };
+        const next = visit(entry);
+        if (next === undefined) continue;
+        headers.push(applySecretValue(header, entry, next));
+      }
+      mcpServers[name] = { ...server, headers };
+    }
+    return { ...settings, mcpServers };
+  },
+};
+
 /** Sensitive env values of user MCP servers, keyed by scope, server and variable. */
 const mcpServerEnvironmentKind: SecretKind = {
   map: (settings, visit) => {
     const mcpServers: Record<string, ServerSettings["mcpServers"][string]> = {};
     for (const [name, server] of Object.entries(settings.mcpServers)) {
+      if (server.transport !== "stdio") {
+        mcpServers[name] = server;
+        continue;
+      }
       const environment: ProviderInstanceEnvironmentVariable[] = [];
       for (const variable of server.env) {
         const entry: SecretEntry = {
@@ -203,6 +236,7 @@ export const SETTINGS_SECRET_KINDS: ReadonlyArray<SecretKind> = [
   providerEnvironmentKind,
   usageLimitSourceKind,
   mcpServerEnvironmentKind,
+  mcpServerHeaderKind,
   bitbucketKind,
   gitHubKind,
 ];

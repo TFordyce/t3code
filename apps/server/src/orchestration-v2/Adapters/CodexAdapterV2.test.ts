@@ -711,6 +711,42 @@ describe("CodexAdapterV2 process spawning", () => {
     });
   });
 
+  it("carries an HTTP user server as the proxy address with the session bearer", () => {
+    const mcpSession = {
+      environmentId: EnvironmentId.make("environment-local"),
+      threadId: ThreadId.make("thread-1"),
+      providerSessionId: "session-1",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer secret-codex-token",
+      browserToolsAvailable: false,
+      userMcp: {
+        servers: [
+          {
+            name: "docs",
+            transport: "http" as const,
+            url: "http://127.0.0.1:43123/mcp-proxy/docs",
+            upstreamUrlFingerprint: "abc",
+          },
+        ],
+        skipped: [],
+      },
+    };
+
+    const { config } = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession });
+
+    assert.deepEqual(config.mcp_servers, {
+      "t3-code": {
+        url: "http://127.0.0.1:43123/mcp",
+        http_headers: { Authorization: "Bearer secret-codex-token" },
+      },
+      docs: {
+        url: "http://127.0.0.1:43123/mcp-proxy/docs",
+        http_headers: { Authorization: "Bearer secret-codex-token" },
+      },
+    });
+  });
+
   it("passes no user servers when the slot has none", () => {
     const { config } = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession: undefined });
     assert.isUndefined(config.mcp_servers);
