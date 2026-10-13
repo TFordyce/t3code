@@ -74,6 +74,7 @@ async function loadMcpBridge(
     readonly toolSearchAvailable?: boolean;
     readonly toolSearchDisabled?: boolean;
     readonly allowsTool?: (name: string) => boolean;
+    readonly userMcpServers?: string;
   } = {},
 ) {
   const handlers = new Map<string, AgentStartHook>();
@@ -100,7 +101,13 @@ async function loadMcpBridge(
   );
   await NodeVM.runInNewContext(`${source}\nt3McpExtension(pi)`, {
     process: {
-      env: { T3_MCP_URL: "http://fixture.invalid/mcp", T3_MCP_BEARER_TOKEN: "fixture-token" },
+      env: {
+        T3_MCP_URL: "http://fixture.invalid/mcp",
+        T3_MCP_BEARER_TOKEN: "fixture-token",
+        ...(options.userMcpServers === undefined
+          ? {}
+          : { T3_PI_USER_MCP_SERVERS: options.userMcpServers }),
+      },
     },
     AbortSignal,
     Type: { Unsafe: (schema: unknown) => schema },
@@ -207,6 +214,27 @@ describe("Pi MCP tool exposure", () => {
       .execute("call-1", { depth: 2 });
     assert.equal(result.content[0]?.text, "browser snapshot");
     assert.equal(bridge.requests.at(-1)?.method, "tools/call");
+  });
+
+  it("registers the user's servers on Pi 0.99 and later, http through the proxy with the session bearer", async () => {
+    const userMcpServers = JSON.stringify([
+      { name: "files", transport: "stdio", command: "npx", args: ["-y", "files"], env: { K: "v" } },
+      { name: "docs", transport: "http", url: "http://127.0.0.1:43123/mcp-proxy/docs" },
+    ]);
+    const bridge = await loadMcpBridge({ modern: true, userMcpServers });
+    assert.deepEqual(JSON.parse(JSON.stringify(bridge.servers)), [
+      { name: "files", config: { command: "npx", args: ["-y", "files"], env: { K: "v" } } },
+      {
+        name: "docs",
+        config: {
+          url: "http://127.0.0.1:43123/mcp-proxy/docs",
+          headers: { authorization: "Bearer fixture-token" },
+        },
+      },
+    ]);
+
+    const legacy = await loadMcpBridge({ modern: false, userMcpServers });
+    assert.deepEqual(legacy.servers, []);
   });
 
   it.each(["legacy Pi", "disabled tool search"])(

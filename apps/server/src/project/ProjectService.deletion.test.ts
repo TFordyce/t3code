@@ -31,6 +31,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 
@@ -492,5 +493,41 @@ it.effect("deletes a project without force once its imported threads were delete
       assert.isNotNull(deleted.deletedAt);
       assert.isTrue(Option.isNone(yield* service.getById(projectId)));
     }).pipe(Effect.provide(layerServices));
+  }).pipe(Effect.provide(layerDatabase)),
+);
+
+it.effect("deleting a project removes its MCP overrides and keeps its other settings", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:mcp-overrides");
+    const otherId = ProjectId.make("project:mcp-other");
+    const gh = {
+      transport: "stdio" as const,
+      command: "gh-mcp",
+      args: [],
+      env: [{ name: "TOKEN", value: "", sensitive: true, valueRedacted: true }],
+    };
+    yield* seedProject(projectId);
+    yield* Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const service = yield* ProjectService.make;
+      yield* service.delete({ commandId: CommandId.make("command:mcp-overrides"), projectId });
+
+      const overrides = (yield* settings.getSettings).projectSettingsOverrides;
+      assert.deepEqual(overrides[projectId], { defaultAutoPull: true });
+      assert.deepEqual(overrides[otherId]?.mcpServers, { gh });
+    }).pipe(
+      Effect.provide(
+        layerServices.pipe(
+          Layer.provideMerge(
+            ServerSettings.layerTest({
+              projectSettingsOverrides: {
+                [projectId]: { defaultAutoPull: true, mcpServers: { gh } },
+                [otherId]: { mcpServers: { gh } },
+              },
+            }),
+          ),
+        ),
+      ),
+    );
   }).pipe(Effect.provide(layerDatabase)),
 );

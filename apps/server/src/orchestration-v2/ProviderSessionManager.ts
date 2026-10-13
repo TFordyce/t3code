@@ -42,6 +42,9 @@ import {
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import type { UserMcpSessionServers } from "@t3tools/provider-core/server/mcpSession";
+import { resolveMcpServers } from "@t3tools/shared/mcpServers";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as EventSink from "./EventSink.ts";
@@ -466,6 +469,63 @@ export const layerWithOptions = (
         (mcpCredentialReservations.get(mcpReservationKey(threadId, mcpCredentialId)) ?? 0) > 0;
       const mcpPrepareLock = yield* KeyedLock.make<ThreadId>();
       /**
+       * The user MCP servers (`settings.mcpServers`) this thread's session gets,
+       * with secrets read from the store into server memory. A server whose
+       * secret cannot be read is skipped, never started without it. Unreadable
+       * settings yield none: a session is better off without user tools than
+       * not starting. HTTP servers become their loopback proxy address under
+       * `mcpEndpoint`; their upstream headers stay in the store.
+       */
+      const resolveUserMcp = Effect.fn("ProviderSessionManagerV2.resolveUserMcp")(function* (
+        threadId: ThreadId,
+        mcpEndpoint: string,
+      ): Effect.fn.Return<UserMcpSessionServers> {
+        if (Option.isNone(serverSettings)) return { servers: [], skipped: [] };
+        return yield* Effect.gen(function* () {
+          const settings = yield* serverSettings.value.getSettings;
+          const projectId = yield* projectionStore.getThread(threadId).pipe(
+            Effect.map((thread) => thread.projectId),
+            Effect.orElseSucceed(() => null),
+          );
+          const servers: Array<UserMcpSessionServers["servers"][number]> = [];
+          const skipped: Array<UserMcpSessionServers["skipped"][number]> = [];
+          for (const { name, config } of resolveMcpServers(settings, projectId)) {
+            // A redacted row that materialized to nothing has no secret in the store.
+            const rows = config.transport === "http" ? config.headers : config.env;
+            if (rows.some((v) => v.sensitive && v.valueRedacted === true && v.value === "")) {
+              skipped.push({ name, reason: "secret-unavailable" });
+              continue;
+            }
+            if (config.transport === "http") {
+              servers.push({
+                name,
+                transport: "http",
+                url: McpProviderSession.mcpProxyUrl(mcpEndpoint, name),
+                upstreamUrlFingerprint: McpProviderSession.upstreamUrlFingerprint(config.url),
+                // The proxy re-resolves in this project, so a later project override or marker applies at once.
+                ...(projectId === null ? {} : { projectId }),
+              });
+              continue;
+            }
+            servers.push({
+              name,
+              transport: "stdio",
+              command: config.command,
+              args: [...config.args],
+              env: Object.fromEntries(config.env.map((v) => [v.name, v.value])),
+            });
+          }
+          return { servers, skipped };
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Could not resolve user MCP servers; starting without them.", {
+              threadId,
+              cause,
+            }).pipe(Effect.as({ servers: [], skipped: [] })),
+          ),
+        );
+      });
+      /**
        * Resolves (or mints) the thread's MCP credential and returns it with a
        * reservation held; the caller must drop the reservation exactly once.
        * Serialized per thread so two concurrent prepares cannot interleave
@@ -521,6 +581,11 @@ export const layerWithOptions = (
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
                     resolved.capabilities.has("device") === deviceToolsAvailable
                   ) {
+                    // The credential is reused; the user servers are not.
+                    yield* mcpSessions.set({
+                      ...existing,
+                      userMcp: yield* resolveUserMcp(threadId, existing.endpoint),
+                    });
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
@@ -532,7 +597,10 @@ export const layerWithOptions = (
                   browserToolsAvailable,
                   capabilities,
                 });
-                yield* mcpSessions.set(credential.config);
+                yield* mcpSessions.set({
+                  ...credential.config,
+                  userMcp: yield* resolveUserMcp(threadId, credential.config.endpoint),
+                });
                 reserveMcpCredential(threadId, credential.config.providerSessionId);
                 return { mcpCredentialId: credential.config.providerSessionId, issued: true };
               }),

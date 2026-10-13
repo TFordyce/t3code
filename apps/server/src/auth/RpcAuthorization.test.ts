@@ -322,6 +322,33 @@ describe("settings mutation authorization", () => {
       expect(handled).toBe(false);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("does not let a settings grant change user MCP servers", () =>
+    Effect.gen(function* () {
+      let handled = false;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.serverUpdateSettings, () =>
+              Effect.sync(() => {
+                handled = true;
+                return DEFAULT_SERVER_SETTINGS;
+              }),
+            ),
+            RpcAuthorization.layer([AuthSettingsWriteScope]),
+          ),
+        ),
+      );
+      expect(
+        yield* client[WS_METHODS.serverUpdateSettings]({
+          patch: {
+            mcpServers: { docs: { transport: "stdio", command: "docs-mcp", args: [], env: [] } },
+          },
+        }).pipe(Effect.flip),
+      ).toMatchObject({ requiredPermission: AuthProvidersManageScope });
+      expect(handled).toBe(false);
+    }).pipe(Effect.scoped),
+  );
 });
 
 it.effect("requires task permission before attaching a prepared worktree to a thread", () =>
@@ -440,6 +467,78 @@ it.effect("denies manual cleanup before the handler without settings permission"
     );
     expect(yield* client[WS_METHODS.serverRunStorageCleanup]({}).pipe(Effect.flip)).toMatchObject({
       requiredPermission: AuthSettingsWriteScope,
+    });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect.each([
+  { method: WS_METHODS.serverStartMcpServerSignIn, payload: { scope: "global", name: "docs" } },
+  {
+    method: WS_METHODS.serverCompleteMcpServerSignIn,
+    payload: { scope: "global", name: "docs", callbackUrl: "http://127.0.0.1:1/callback?code=a" },
+  },
+  { method: WS_METHODS.serverSignOutMcpServer, payload: { scope: "global", name: "docs" } },
+] as const)("denies MCP sign-in RPC $method without providers-manage", ({ method, payload }) =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof method> => tag !== method,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(method, () =>
+            Effect.sync(() => {
+              handled = true;
+              return {} as never;
+            }),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope, AuthSettingsWriteScope]),
+        ),
+      ),
+    );
+    expect(
+      yield* (
+        client[method] as (
+          input: typeof payload,
+        ) => Effect.Effect<void, { readonly requiredPermission: string }>
+      )(payload).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthProvidersManageScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("denies an MCP server re-check before the handler without providers-manage", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.serverCheckMcpServers
+        > => tag !== WS_METHODS.serverCheckMcpServers,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.serverCheckMcpServers, () =>
+            Effect.sync(() => {
+              handled = true;
+              return {};
+            }),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope, AuthSettingsWriteScope]),
+        ),
+      ),
+    );
+    expect(yield* client[WS_METHODS.serverCheckMcpServers]({}).pipe(Effect.flip)).toMatchObject({
+      requiredPermission: AuthProvidersManageScope,
     });
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),

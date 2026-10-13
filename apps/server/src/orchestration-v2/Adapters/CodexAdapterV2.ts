@@ -25,6 +25,7 @@ import {
   CodexSettings,
   defaultInstanceIdForDriver,
   isOrchestrationV2WorkActive,
+  type McpSessionServerStatus,
   OrchestrationV2ProviderGoal,
   ProviderDriverKind,
   type ProviderSetupError,
@@ -262,6 +263,7 @@ export const CodexProviderCapabilitiesV2 = {
     emitsToolCompleted: true,
     emitsToolOutput: true,
     supportsMcpTools: true,
+    userMcpTransports: ["stdio", "http"],
     supportsDynamicToolCallbacks: true,
   },
   approvals: {
@@ -1322,10 +1324,76 @@ export function codexThreadRuntimeParams(input: {
                   Authorization: mcpSession.authorizationHeader,
                 },
               },
+              ...Object.fromEntries(
+                McpProviderSession.userMcpServersFor(
+                  mcpSession,
+                  CodexProviderCapabilitiesV2.tools.userMcpTransports,
+                ).map((server) => [
+                  server.name,
+                  server.transport === "http"
+                    ? {
+                        url: server.url,
+                        http_headers: { Authorization: mcpSession.authorizationHeader },
+                      }
+                    : { command: server.command, args: [...server.args], env: { ...server.env } },
+                ]),
+              ),
             },
           }),
     },
   };
+}
+
+/** Codex's `mcpServer/startupStatus/updated` push, as a shared session status. */
+export function codexMcpStartupStatus(payload: {
+  readonly status: "starting" | "ready" | "failed" | "cancelled";
+  readonly failureReason?: "reauthenticationRequired" | null;
+  readonly error?: string | null;
+}): Omit<McpSessionServerStatus, "name"> {
+  switch (payload.status) {
+    case "starting":
+      return { status: "connecting" };
+    case "ready":
+      return { status: "connected" };
+    case "failed":
+    case "cancelled":
+      if (payload.failureReason === "reauthenticationRequired") return { status: "needs-auth" };
+      return payload.error ? { status: "failed", error: payload.error } : { status: "failed" };
+  }
+}
+
+/** One `mcpServerStatus/list` entry, as a shared session status. */
+export function codexMcpListedStatus(entry: {
+  readonly runtimeStatus?:
+    | "notStarted"
+    | "starting"
+    | "connected"
+    | "authenticationRequired"
+    | "failed"
+    | "cancelled"
+    | "disabled"
+    | null;
+  readonly tools: Readonly<Record<string, unknown>>;
+  readonly toolsError?: string | null;
+}): Omit<McpSessionServerStatus, "name"> {
+  switch (entry.runtimeStatus) {
+    case "notStarted":
+    case "starting":
+      return { status: "connecting" };
+    case "connected":
+      return { status: "connected", toolCount: Object.keys(entry.tools).length };
+    case "authenticationRequired":
+      return { status: "needs-auth" };
+    case "failed":
+    case "cancelled":
+      return entry.toolsError
+        ? { status: "failed", error: entry.toolsError }
+        : { status: "failed" };
+    case "disabled":
+      return { status: "disabled" };
+    default:
+      return { status: "unknown" };
+  }
 }
 
 const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
@@ -1900,6 +1968,54 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
+
+        // Session MCP status: the latest report per server, published as the
+        // session's whole list whenever it changes.
+        const reportedMcpStatuses = new Map<string, McpSessionServerStatus>();
+        let mcpStatusConfig: McpProviderSession.McpProviderSessionConfig | undefined;
+        let publishedMcpStatuses = "";
+        const publishMcpStatuses = Effect.gen(function* () {
+          const mcpServers = McpProviderSession.sessionMcpStatuses({
+            config: mcpStatusConfig,
+            transports: CodexProviderCapabilitiesV2.tools.userMcpTransports,
+            reported: [...reportedMcpStatuses.values()],
+          });
+          if (mcpServers === undefined) return;
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - change-detection key, never parsed.
+          const key = JSON.stringify(mcpServers);
+          if (key === publishedMcpStatuses) return;
+          publishedMcpStatuses = key;
+          yield* emitProviderEvent({
+            type: "provider_session.updated",
+            driver: CODEX_PROVIDER,
+            providerSession: { ...session, mcpServers, updatedAt: yield* DateTime.now },
+          });
+        });
+        const reportMcpStatus = (name: string, status: Omit<McpSessionServerStatus, "name">) =>
+          Effect.suspend(() => {
+            reportedMcpStatuses.set(name, { name, ...status });
+            return publishMcpStatuses;
+          });
+        /** Called once a thread has started with its MCP servers, to seed the list. */
+        const refreshMcpStatuses = Effect.fnUntraced(function* (
+          nativeThreadId: string,
+          mcpSession: McpProviderSession.McpProviderSessionConfig | undefined,
+        ) {
+          mcpStatusConfig = mcpSession;
+          yield* publishMcpStatuses;
+          if (mcpSession?.userMcp === undefined) return;
+          const response = yield* client.request("mcpServerStatus/list", {
+            threadId: nativeThreadId,
+            detail: "toolsAndAuthOnly",
+          });
+          for (const entry of response.data) {
+            reportedMcpStatuses.set(entry.name, {
+              name: entry.name,
+              ...codexMcpListedStatus(entry),
+            });
+          }
+          yield* publishMcpStatuses;
+        });
 
         /** Writes the thread's current native goal onto its root provider thread. */
         const emitGoalUpdate = Effect.fnUntraced(function* (nativeThreadId: string) {
@@ -4294,6 +4410,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
+        yield* client.handleServerNotification("mcpServer/startupStatus/updated", (payload) =>
+          reportMcpStatus(payload.name, codexMcpStartupStatus(payload)).pipe(Effect.orDie),
+        );
+
         yield* client.handleServerNotification("account/rateLimits/updated", (payload) =>
           Effect.gen(function* () {
             yield* Ref.update(rateLimitSnapshot, (previous) =>
@@ -6463,14 +6583,23 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             ensureInitialized.pipe(
               Effect.andThen(mcpSessions.read(threadInput.threadId)),
               Effect.flatMap((mcpSession) =>
-                client.request(
-                  "thread/start",
-                  codexThreadRuntimeParams({
-                    mcpSession,
-                    modelSelection: threadInput.modelSelection,
-                    runtimePolicy: threadInput.runtimePolicy,
-                  }),
-                ),
+                client
+                  .request(
+                    "thread/start",
+                    codexThreadRuntimeParams({
+                      mcpSession,
+                      modelSelection: threadInput.modelSelection,
+                      runtimePolicy: threadInput.runtimePolicy,
+                    }),
+                  )
+                  .pipe(
+                    Effect.tap((response) =>
+                      refreshMcpStatuses(response.thread.id, mcpSession).pipe(
+                        Effect.ignore,
+                        Effect.forkIn(scope),
+                      ),
+                    ),
+                  ),
               ),
               Effect.map((response): OrchestrationV2ProviderThread =>
                 providerThreadFromCodexThread({
@@ -6494,14 +6623,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           resumeThread: (threadInput) =>
             Effect.gen(function* () {
               const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
+              const mcpSession = yield* readMcpSession(
+                threadInput.threadId ?? threadInput.providerThread.appThreadId,
+              );
               // excludeTurns is not in the generated request schema yet.
               const resume = client.raw.request("thread/resume", {
                 threadId: nativeThreadId,
                 excludeTurns: true,
                 ...codexThreadRuntimeParams({
-                  mcpSession: yield* readMcpSession(
-                    threadInput.threadId ?? threadInput.providerThread.appThreadId,
-                  ),
+                  mcpSession,
                   ...(threadInput.modelSelection === undefined
                     ? {}
                     : { modelSelection: threadInput.modelSelection }),
@@ -6531,6 +6661,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ),
                 ),
                 Effect.flatMap(decodeCodexResumeMetadata),
+              );
+              yield* refreshMcpStatuses(response.thread.id, mcpSession).pipe(
+                Effect.ignore,
+                Effect.forkIn(scope),
               );
               // Codex follows a resume with a goal snapshot notification; the
               // run's first turn writes it if it differs from the stored goal.

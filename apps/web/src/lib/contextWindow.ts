@@ -20,6 +20,7 @@ export type ContextWindowSnapshot = NullableContextWindowUsage & {
   readonly remainingTokens: number | null;
   readonly usedPercentage: number | null;
   readonly remainingPercentage: number | null;
+  readonly breakdown: NonNullable<OrchestrationV2ProviderTurnTokenUsage["breakdown"]> | null;
   readonly updatedAt: string;
 };
 
@@ -50,9 +51,10 @@ export function deriveLatestContextWindowSnapshot(
       cachedInputTokens: liveUsage.cachedInputTokens ?? null,
       outputTokens: liveUsage.outputTokens ?? null,
       reasoningOutputTokens: liveUsage.reasoningOutputTokens ?? null,
+      // A live report describes the provider's latest request.
       lastUsedTokens: null,
-      lastInputTokens: null,
-      lastCachedInputTokens: null,
+      lastInputTokens: liveUsage.inputTokens ?? null,
+      lastCachedInputTokens: liveUsage.cachedInputTokens ?? null,
       lastOutputTokens: null,
       lastReasoningOutputTokens: null,
       toolUses: null,
@@ -60,6 +62,7 @@ export function deriveLatestContextWindowSnapshot(
       compactsAutomatically: true,
       autoCompactThreshold: null,
       cost: null,
+      breakdown: liveUsage.breakdown ?? null,
       updatedAt: liveUsage.updatedAt,
     };
   }
@@ -95,6 +98,7 @@ export function deriveLatestContextWindowSnapshot(
       compactsAutomatically: providerUsage.compactsAutomatically ?? null,
       cost: providerUsage.cost ?? null,
       autoCompactThreshold: providerUsage.autoCompactThreshold ?? null,
+      breakdown: null,
       updatedAt: DateTime.formatIso(providerUsageUpdatedAt),
     };
   }
@@ -137,6 +141,7 @@ export function deriveLatestContextWindowSnapshot(
       compactsAutomatically: true,
       autoCompactThreshold: null,
       cost: null,
+      breakdown: null,
       updatedAt: DateTime.formatIso(payload.startedAt ?? payload.updatedAt),
     };
   }

@@ -106,7 +106,10 @@ import {
   presentPendingBackgroundWork,
   presentProviderGoal,
 } from "@t3tools/client-runtime/state/thread-execution";
-import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
+import {
+  selectThreadMcpSessionServers,
+  threadSupportsProviderHandoff,
+} from "@t3tools/client-runtime/state/thread-workflows";
 import {
   codexFeedbackMessage,
   parseCodexFeedbackCommand,
@@ -286,6 +289,7 @@ import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs } from "./RightPanelTabs";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
+import { ThreadMcpPanel } from "./mcp/ThreadMcpPanel";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { ThreadAgentsPanel } from "./chat/ThreadAgentsPanel";
 import { useDeviceState } from "~/state/device";
@@ -5462,6 +5466,14 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef || !agentsSurfaceAvailable) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
   }, [activeThreadRef, agentsSurfaceAvailable]);
+  const addMcpSurface = useCallback(() => {
+    if (!activeThreadRef || !isServerThread) return;
+    useRightPanelStore.getState().open(activeThreadRef, "mcp");
+  }, [activeThreadRef, isServerThread]);
+  const threadMcpSessionServers = useMemo(
+    () => selectThreadMcpSessionServers(serverProjection),
+    [serverProjection],
+  );
   const { state: deviceState, loaded: deviceStateLoaded } = useDeviceState(
     activeThreadRef?.environmentId ?? null,
   );
@@ -11122,6 +11134,12 @@ export default function ChatView(props: ChatViewProps) {
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />
     ) : renderedRightPanelSurface?.kind === "agents" && activeThreadRef ? (
       <ThreadAgentsPanel threadRef={activeThreadRef} />
+    ) : renderedRightPanelSurface?.kind === "mcp" && activeThreadRef ? (
+      <ThreadMcpPanel
+        environmentId={activeThreadRef.environmentId}
+        sessionServers={threadMcpSessionServers}
+        projectId={activeThread.projectId}
+      />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>
         <DevicePanel
@@ -12027,6 +12045,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequests={addPullRequestsSurface}
           onAddAgents={addAgentsSurface}
           onAddDevice={addDeviceSurface}
+          onAddMcp={addMcpSurface}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
           diffAvailable={isServerThread && isGitRepo}
@@ -12035,6 +12054,7 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
           agentsAvailable={agentsSurfaceAvailable}
           deviceAvailable={activeThreadRef !== null}
+          mcpAvailable={isServerThread}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -12088,6 +12108,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequests={addPullRequestsSurface}
             onAddAgents={addAgentsSurface}
             onAddDevice={addDeviceSurface}
+            onAddMcp={addMcpSurface}
             browserAvailable={canOperatePreview && browserAvailable}
             terminalAvailable={activeProject !== null && canOperateTerminal}
             diffAvailable={isServerThread && isGitRepo}
@@ -12096,6 +12117,7 @@ export default function ChatView(props: ChatViewProps) {
             pullRequestsAvailable={pullRequestsSurfaceAvailable}
             agentsAvailable={agentsSurfaceAvailable}
             deviceAvailable={activeThreadRef !== null}
+            mcpAvailable={isServerThread}
           >
             {rightPanelContent}
           </RightPanelTabs>

@@ -3,6 +3,13 @@ import {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
 } from "./orchestrationV2.ts";
+import {
+  CheckMcpServersInput,
+  CompleteMcpServerSignInInput,
+  McpServerCheckTarget,
+  McpServerSignInError,
+  McpServerSignInStarted,
+} from "./mcpServers.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
   McpAppCallToolInput,
@@ -475,6 +482,10 @@ export const WS_METHODS = {
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
+  serverCheckMcpServers: "server.checkMcpServers",
+  serverStartMcpServerSignIn: "server.startMcpServerSignIn",
+  serverCompleteMcpServerSignIn: "server.completeMcpServerSignIn",
+  serverSignOutMcpServer: "server.signOutMcpServer",
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
@@ -743,6 +754,26 @@ const WsServerRunStorageCleanupRpc = Rpc.make(WS_METHODS.serverRunStorageCleanup
   payload: Schema.Struct({}),
   success: StorageCleanupReport,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+const WsServerCheckMcpServersRpc = Rpc.make(WS_METHODS.serverCheckMcpServers, {
+  payload: CheckMcpServersInput,
+  success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
+});
+const WsServerStartMcpServerSignInRpc = Rpc.make(WS_METHODS.serverStartMcpServerSignIn, {
+  payload: McpServerCheckTarget,
+  success: McpServerSignInStarted,
+  error: Schema.Union([McpServerSignInError, EnvironmentAuthorizationError]),
+});
+const WsServerCompleteMcpServerSignInRpc = Rpc.make(WS_METHODS.serverCompleteMcpServerSignIn, {
+  payload: CompleteMcpServerSignInInput,
+  success: Schema.Struct({}),
+  error: Schema.Union([McpServerSignInError, EnvironmentAuthorizationError]),
+});
+const WsServerSignOutMcpServerRpc = Rpc.make(WS_METHODS.serverSignOutMcpServer, {
+  payload: McpServerCheckTarget,
+  success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
 });
 const WsServerGetStorageCleanupReportRpc = Rpc.make(WS_METHODS.serverGetStorageCleanupReport, {
   payload: Schema.Struct({}),
@@ -1716,6 +1747,11 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
     /** Whether this client understands `usageLimitSourcesUpdated` events. */
     usageLimitSources: Schema.optional(Schema.Boolean),
     /**
+     * Whether this client understands `mcpServerChecksUpdated` events. The
+     * snapshot carries `mcpServerChecks` and the event is sent only when set.
+     */
+    mcpServerChecks: Schema.optional(Schema.Boolean),
+    /**
      * Whether this client answers `/usage-limits` itself. The server injects
      * that command into provider catalogs only for such clients; an older
      * client would send it to the provider as an ordinary prompt.
@@ -1861,6 +1897,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,
+  WsServerCheckMcpServersRpc,
+  WsServerStartMcpServerSignInRpc,
+  WsServerCompleteMcpServerSignInRpc,
+  WsServerSignOutMcpServerRpc,
   WsServerGetStorageCleanupReportRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,

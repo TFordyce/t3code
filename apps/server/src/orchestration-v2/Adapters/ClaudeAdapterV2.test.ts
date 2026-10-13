@@ -547,6 +547,54 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     });
   });
 
+  it("carries user servers beside t3-code with secrets only in the child env", () => {
+    const threadId = ThreadId.make("thread-claude-user-mcp");
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: {
+        ...mcpSessionFor(threadId),
+        userMcp: {
+          servers: [
+            {
+              name: "github",
+              transport: "stdio",
+              command: "npx",
+              args: ["-y", "gh-mcp"],
+              env: { GITHUB_TOKEN: "ghp_secret" },
+            },
+            {
+              name: "docs",
+              transport: "http",
+              url: "http://127.0.0.1:43123/mcp-proxy/docs",
+              upstreamUrlFingerprint: "fp",
+            },
+          ],
+          skipped: [],
+        },
+      },
+      readOnlySandbox: false,
+    });
+
+    const servers = overrides.mcpServers as Record<string, unknown>;
+    assert.deepEqual(Object.keys(servers), ["t3-code", "github", "docs"]);
+    const placeholder = (servers.github as { env: Record<string, string> }).env.GITHUB_TOKEN!;
+    assert.match(placeholder, /^\$\{[A-Z0-9_]+\}$/);
+    const envName = placeholder.slice(2, -1);
+    assert.equal(overrides.mcpEnvironment?.[envName], "ghp_secret");
+    assert.deepEqual(servers.github, {
+      type: "stdio",
+      command: "npx",
+      args: ["-y", "gh-mcp"],
+      env: { GITHUB_TOKEN: placeholder },
+    });
+    const docs = servers.docs as { type: string; url: string; headers: Record<string, string> };
+    assert.equal(docs.type, "http");
+    assert.equal(docs.url, "http://127.0.0.1:43123/mcp-proxy/docs");
+    assert.equal(docs.headers.Authorization, "${T3_CODE_MCP_AUTHORIZATION}");
+    assert.notInclude(JSON.stringify(servers), "ghp_secret");
+    assert.notInclude(JSON.stringify(servers), "secret-claude-token");
+    assert.deepEqual(overrides.allowedTools, [ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD]);
+  });
+
   it("pre-approves only read-only t3-code tools in a read-only sandbox", () => {
     const threadId = ThreadId.make("thread-claude-mcp-read-only");
     const mcpSession = mcpSessionFor(threadId);
@@ -2110,6 +2158,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     // A CLI process opened after the first streams from its own queue, so the
     // first one can exit (Queue.shutdown) and a later turn can start another.
     readonly freshQueueOnReopen?: boolean;
+    readonly getContextUsage?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["getContextUsage"];
+    readonly mcpServerStatus?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["mcpServerStatus"];
   }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2204,6 +2254,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   }),
                 interrupt: options?.interrupt ?? Effect.void,
                 close: options?.close?.(sdkMessages) ?? Effect.void,
+                ...(options?.getContextUsage === undefined
+                  ? {}
+                  : { getContextUsage: options.getContextUsage }),
+                ...(options?.mcpServerStatus === undefined
+                  ? {}
+                  : { mcpServerStatus: options.mcpServerStatus }),
               };
             }),
           forkSession: () => Effect.die("unused forkSession"),
@@ -3204,6 +3260,173 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
         ),
       ),
+  );
+
+  const runContextBreakdownTurn = (
+    getContextUsage: NonNullable<ClaudeAdapterV2.ClaudeAgentSdkQuerySession["getContextUsage"]>,
+  ) =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarnessWithOptions({ getContextUsage });
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("claude-context-breakdown"),
+          text: "Summarize the repo",
+          attachments: [],
+        }),
+      );
+      yield* harness.offerAndWait(
+        makeAssistantTextFrame({ uuid: "00000000-0000-4000-8000-000000000401", text: "Done." }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000402", result: "Done." }),
+      );
+      const terminal = yield* Queue.take(harness.terminalReceipts);
+      const completed = harness.events.findLast((event) => event.type === "provider_turn.updated");
+      return {
+        status: terminal.status,
+        tokenUsage:
+          completed?.type === "provider_turn.updated"
+            ? completed.providerTurn.tokenUsage
+            : undefined,
+      };
+    });
+
+  it.effect("attaches Claude's context breakdown to the completed turn's usage", () =>
+    Effect.gen(function* () {
+      const { status, tokenUsage } = yield* runContextBreakdownTurn(
+        Effect.succeed({
+          categories: [
+            { name: "System prompt", tokens: 3_000, kind: "used" },
+            { name: "System tools", tokens: 12_000, kind: "used" },
+            { name: "MCP tools (deferred)", tokens: 9_000, kind: "deferred" },
+            { name: "Skills", tokens: 0, kind: "used" },
+            { name: "Messages", tokens: 40_000, kind: "used" },
+            { name: "Autocompact buffer", tokens: 33_000, kind: "buffer" },
+            { name: "Free space", tokens: 100_000, kind: "free" },
+          ],
+        }),
+      );
+      assert.equal(status, "completed");
+      // The headline stays the API-reported usage; the breakdown only explains it.
+      assert.equal(tokenUsage?.usedTokens, 2);
+      assert.deepEqual(tokenUsage?.breakdown, [
+        { name: "System prompt", tokens: 3_000 },
+        { name: "System tools", tokens: 12_000 },
+        { name: "Messages", tokens: 40_000 },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+      ),
+    ),
+  );
+
+  it.effect("publishes session MCP status after init and after a turn", () =>
+    Effect.gen(function* () {
+      let reports = 0;
+      const harness = yield* makeWakeHarnessWithOptions({
+        mcpServerStatus: Effect.sync(() => {
+          reports++;
+          return reports === 1
+            ? [
+                { name: "t3-code", status: "connected" as const },
+                { name: "docs", status: "pending" as const },
+                { name: "crm", status: "needs-auth" as const },
+              ]
+            : [
+                { name: "t3-code", status: "connected" as const },
+                {
+                  name: "docs",
+                  status: "connected" as const,
+                  tools: [{ name: "a" }, { name: "b" }],
+                },
+                { name: "crm", status: "failed" as const, error: "401" },
+              ];
+        }),
+      });
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      yield* mcpSessions.set({
+        environmentId: EnvironmentId.make("environment-claude-mcp-status"),
+        threadId: harness.threadId,
+        providerSessionId: "mcp-session-claude-status",
+        providerInstanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer secret",
+        browserToolsAvailable: false,
+        userMcp: {
+          servers: [
+            { name: "docs", transport: "stdio", command: "docs-mcp", args: [], env: {} },
+            { name: "crm", transport: "stdio", command: "crm-mcp", args: [], env: {} },
+          ],
+          skipped: [{ name: "vault", reason: "secret-unavailable" }],
+        },
+      });
+      const lists = () =>
+        harness.events.flatMap((event) =>
+          event.type === "provider_session.updated" &&
+          event.providerSession.mcpServers !== undefined
+            ? [event.providerSession.mcpServers]
+            : [],
+        );
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("claude-mcp-status"),
+          text: "Hello",
+          attachments: [],
+        }),
+      );
+      yield* harness.offerAndWait(wakeTurnInit);
+      yield* awaitUntil(() => lists().length === 1, "the status after init");
+      assert.deepEqual(lists()[0], [
+        { name: "docs", status: "connecting" },
+        { name: "crm", status: "needs-auth" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
+      ]);
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000412", result: "Done." }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+      yield* awaitUntil(() => lists().length === 2, "the status after the turn");
+      assert.deepEqual(lists()[1], [
+        { name: "docs", status: "connected", toolCount: 2 },
+        { name: "crm", status: "failed", error: "401" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+      ),
+    ),
+  );
+
+  it.effect("completes the turn without a breakdown when Claude cannot report one", () =>
+    Effect.gen(function* () {
+      const { status, tokenUsage } = yield* runContextBreakdownTurn(
+        Effect.fail(
+          new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
+            method: "getContextUsage",
+            cause: new Error("control request failed"),
+          }),
+        ),
+      );
+      assert.equal(status, "completed");
+      assert.isUndefined(tokenUsage?.breakdown);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+      ),
+    ),
   );
 
   it.effect("titles Claude reads, searches, and skills on tool completion", () =>

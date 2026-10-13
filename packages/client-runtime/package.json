@@ -159,6 +159,10 @@
       "types": "./src/state/itemSupport.ts",
       "default": "./src/state/itemSupport.ts"
     },
+    "./state/mcp-server-checks": {
+      "types": "./src/state/mcpServerChecks.ts",
+      "default": "./src/state/mcpServerChecks.ts"
+    },
     "./state/models": {
       "types": "./src/state/models.ts",
       "default": "./src/state/models.ts"

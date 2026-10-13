@@ -353,6 +353,17 @@ export function resolveServerUpdateProgressResult<E>(
   return Effect.fail(new ServerUpdateProgressIncompleteError({ targetVersion }));
 }
 
+/**
+ * What the cache keeps: server checks are live results of the host, so a cached
+ * copy would show a stale status until the first snapshot.
+ */
+const withoutCachedState = (config: ServerConfig): ServerConfig => {
+  const stripped = withoutEnvironmentThemes(config);
+  if (stripped.mcpServerChecks === undefined) return stripped;
+  const { mcpServerChecks: _checks, ...rest } = stripped;
+  return rest;
+};
+
 const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEvent => ({
   version: 1,
   type: "snapshot",
@@ -362,6 +373,7 @@ const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEven
 export interface ServerConfigSubscriptionOptions {
   readonly environmentThemes?: boolean;
   readonly usageLimitSources?: boolean;
+  readonly mcpServerChecks?: boolean;
   readonly usageLimitsCommand?: boolean;
 }
 
@@ -385,8 +397,8 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
       // Stripped on load as well as on save: a cache written by an earlier
       // build can still carry published themes.
       Option.map(cachedConfig, (cached) => ({
-        config: withoutEnvironmentThemes(cached),
-        latestEvent: cachedConfigSnapshotEvent(withoutEnvironmentThemes(cached)),
+        config: withoutCachedState(cached),
+        latestEvent: cachedConfigSnapshotEvent(withoutCachedState(cached)),
         source: "cache" as const,
       })),
     );
@@ -396,7 +408,7 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     const persist = Effect.fn("EnvironmentServerConfigState.persist")(function* (
       config: ServerConfig,
     ) {
-      return yield* cache.saveServerConfig(environmentId, withoutEnvironmentThemes(config)).pipe(
+      return yield* cache.saveServerConfig(environmentId, withoutCachedState(config)).pipe(
         Effect.as(true),
         Effect.catch((error) =>
           Effect.logWarning("Could not persist cached server configuration.").pipe(
@@ -437,6 +449,7 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     yield* subscribe(WS_METHODS.subscribeServerConfig, {
       ...(subscription.environmentThemes === true ? { environmentThemes: true } : {}),
       ...(subscription.usageLimitSources === true ? { usageLimitSources: true } : {}),
+      ...(subscription.mcpServerChecks === true ? { mcpServerChecks: true } : {}),
       ...(subscription.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
     }).pipe(
       Stream.runForEach((event) =>
@@ -626,6 +639,8 @@ export function createServerEnvironmentAtoms<R, E>(
     readonly environmentThemes?: boolean;
     /** Whether this surface renders quota from configured usage-limit sources. */
     readonly usageLimitSources?: boolean;
+    /** Whether this surface shows server checks of user MCP servers. */
+    readonly mcpServerChecks?: boolean;
     readonly usageLimitsCommand?: boolean;
   },
 ) {
@@ -642,6 +657,7 @@ export function createServerEnvironmentAtoms<R, E>(
         serverConfigStateChanges(environmentId, {
           ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
           ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
+          ...(options.mcpServerChecks === true ? { mcpServerChecks: true } : {}),
           ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
         }),
       )
@@ -983,6 +999,23 @@ export function createServerEnvironmentAtoms<R, E>(
 
   return {
     configValueAtom,
+    checkMcpServers: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:check-mcp-servers",
+      tag: WS_METHODS.serverCheckMcpServers,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
+    startMcpServerSignIn: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:start-mcp-server-sign-in",
+      tag: WS_METHODS.serverStartMcpServerSignIn,
+    }),
+    completeMcpServerSignIn: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:complete-mcp-server-sign-in",
+      tag: WS_METHODS.serverCompleteMcpServerSignIn,
+    }),
+    signOutMcpServer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:sign-out-mcp-server",
+      tag: WS_METHODS.serverSignOutMcpServer,
+    }),
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",
       tag: WS_METHODS.serverRunStorageCleanup,

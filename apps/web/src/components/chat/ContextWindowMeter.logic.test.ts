@@ -2,6 +2,8 @@ import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3
 import { describe, expect, it } from "vite-plus/test";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
+  deriveContextWindowBreakdownSegments,
+  formatContextWindowCacheHitRate,
   formatContextWindowCompactionMessage,
   hasAvailableCompactionProvider,
   hasDismissedResumeCompaction,
@@ -292,5 +294,52 @@ describe("formatContextWindowCost", () => {
   it("keeps ordinary and sub-cent ACP costs readable", () => {
     expect(formatContextWindowCost({ amount: 0.42, currency: "USD" })).toBe("USD 0.42");
     expect(formatContextWindowCost({ amount: 0.0042, currency: "USD" })).toBe("USD 0.0042");
+  });
+});
+
+describe("formatContextWindowCacheHitRate", () => {
+  it("reports the share of the last request's input read from cache", () => {
+    expect(
+      formatContextWindowCacheHitRate({ lastInputTokens: 49_000, lastCachedInputTokens: 44_100 }),
+    ).toBe("90%");
+    expect(
+      formatContextWindowCacheHitRate({ lastInputTokens: 1_000, lastCachedInputTokens: 0 }),
+    ).toBe("0%");
+  });
+
+  it("shows nothing when the provider did not report the request's input", () => {
+    expect(
+      formatContextWindowCacheHitRate({ lastInputTokens: 0, lastCachedInputTokens: 0 }),
+    ).toBeNull();
+    expect(
+      formatContextWindowCacheHitRate({ lastInputTokens: 1_000, lastCachedInputTokens: null }),
+    ).toBeNull();
+    expect(
+      formatContextWindowCacheHitRate({ lastInputTokens: null, lastCachedInputTokens: 10 }),
+    ).toBeNull();
+  });
+});
+
+describe("deriveContextWindowBreakdownSegments", () => {
+  it("splits the filled part of the bar in proportion to each category", () => {
+    expect(
+      deriveContextWindowBreakdownSegments(
+        [
+          { name: "System prompt", tokens: 10_000 },
+          { name: "System tools", tokens: 30_000 },
+          { name: "Messages", tokens: 60_000 },
+        ],
+        40,
+      ),
+    ).toEqual([
+      { name: "System prompt", tokens: 10_000, widthPercentage: 4 },
+      { name: "System tools", tokens: 30_000, widthPercentage: 12 },
+      { name: "Messages", tokens: 60_000, widthPercentage: 24 },
+    ]);
+  });
+
+  it("has no segments without a breakdown", () => {
+    expect(deriveContextWindowBreakdownSegments(null, 40)).toBeNull();
+    expect(deriveContextWindowBreakdownSegments([], 40)).toBeNull();
   });
 });

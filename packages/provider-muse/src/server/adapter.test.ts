@@ -380,6 +380,51 @@ describe("MuseAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("sends user servers as optional beside t3-code", () =>
+    Effect.gen(function* () {
+      yield* (yield* McpProviderSessions.McpProviderSessions).set({
+        environmentId: EnvironmentId.make("test-environment"),
+        threadId: THREAD_ID,
+        providerSessionId: "test-session",
+        providerInstanceId: INSTANCE_ID,
+        endpoint: "http://127.0.0.1:43210/mcp",
+        authorizationHeader: "Bearer thread-scoped-test-token",
+        browserToolsAvailable: true,
+        userMcp: {
+          servers: [
+            { name: "github", transport: "stdio", command: "npx", args: ["gh"], env: { T: "x" } },
+            {
+              name: "docs",
+              transport: "http",
+              url: "http://127.0.0.1:43210/mcp-proxy/docs",
+              upstreamUrlFingerprint: "fp",
+            },
+          ],
+          skipped: [],
+        },
+      });
+      const fake = yield* makeFakeMuse();
+      fake.host.initializeResult.grantedCapabilities.push("sessionMcp");
+      yield* makeHarness(fake, INSTANCE_ID);
+      const call = yield* fake.takeCall("session/start");
+      const servers = (call.params.config as { mcpServers: Record<string, unknown> }).mcpServers;
+      assert.deepStrictEqual(Object.keys(servers), ["t3-code", "github", "docs"]);
+      assert.deepStrictEqual(servers.github, {
+        transport: "stdio",
+        mode: "optional",
+        command: "npx",
+        args: ["gh"],
+        env: { T: "x" },
+      });
+      assert.deepStrictEqual(servers.docs, {
+        transport: "streamableHttp",
+        mode: "optional",
+        url: "http://127.0.0.1:43210/mcp-proxy/docs",
+        headers: { Authorization: "Bearer thread-scoped-test-token" },
+      });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("rejects a host without session MCP support before opening a native session", () =>
     Effect.gen(function* () {
       yield* (yield* McpProviderSessions.McpProviderSessions).set({

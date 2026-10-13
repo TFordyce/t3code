@@ -58,6 +58,10 @@ import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
+import * as McpProxy from "./mcp/McpProxy.ts";
+import * as McpServerChecks from "./mcp/McpServerChecks.ts";
+import * as McpSignIn from "./mcp/McpSignIn.ts";
+import * as McpUpstream from "./mcp/McpUpstream.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -624,6 +628,11 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
       ResetCreditCoordinator.layer,
       ProviderLatestVersions.layer,
       McpProviderSessions.layer,
+      // One McpSignIn and McpUpstream are shared by checks, the proxy and the RPCs.
+      McpServerChecks.layer.pipe(
+        Layer.provideMerge(McpUpstream.layer),
+        Layer.provideMerge(McpSignIn.layer),
+      ),
     ),
   ),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
@@ -715,6 +724,8 @@ const layerMakeRoutes = Layer.mergeAll(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
   ),
+  // Reaches user HTTP MCP servers for provider sessions; see McpProxy.
+  McpProxy.layer,
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.

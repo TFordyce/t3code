@@ -63,6 +63,7 @@ import {
   MonitorIcon,
   MoonIcon,
   PaletteIcon,
+  PlugIcon,
   RotateCcwIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -2008,6 +2009,20 @@ function OpenCommandPaletteDialog(props: {
   }
 
   if (activeThread !== null) {
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:open-thread-mcp",
+      searchTerms: ["mcp", "servers", "tools", "status", "session"],
+      title: "Show MCP servers for this thread",
+      icon: <PlugIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        useRightPanelStore.getState().open(threadRef, "mcp");
+      },
+    });
+  }
+
+  if (activeThread !== null) {
     const thread = activeThread;
     actionItems.push({
       kind: "action",
@@ -2297,6 +2312,17 @@ function OpenCommandPaletteDialog(props: {
     icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/settings" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:mcp-settings",
+    searchTerms: ["mcp", "model context protocol", "servers", "tools", "settings"],
+    title: "Open MCP settings",
+    icon: <PlugIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/settings/mcp" });
     },
   });
 

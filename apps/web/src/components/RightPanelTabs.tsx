@@ -34,6 +34,7 @@ import {
   BotIcon,
   Files,
   Globe2,
+  Plug,
   Plus,
   TerminalSquare,
 } from "lucide-react";
@@ -145,6 +146,7 @@ interface RightPanelTabsProps {
   onAddPullRequests: () => void;
   onAddAgents: () => void;
   onAddDevice: () => void;
+  onAddMcp: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -153,6 +155,7 @@ interface RightPanelTabsProps {
   pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
   deviceAvailable: boolean;
+  mcpAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -182,6 +185,7 @@ const SURFACE_DISABLED_REASONS = {
   pullRequests: "No linked pull requests are available for this thread.",
   agents: "Agents are only available for server threads.",
   device: "Devices are only available from a thread.",
+  mcp: "MCP status is only available from a thread.",
 } as const;
 
 /** Overlays that must win over the launcher's letter shortcuts. */
@@ -206,6 +210,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   pullRequests: "No linked pull requests available.",
   agents: "Available for server threads.",
   device: "Available from a thread.",
+  mcp: "Available from a thread.",
 } as const;
 
 type TabContextMenuAction =
@@ -347,6 +352,7 @@ function RightPanelEmptyState(props: {
   onAddPullRequests: () => void;
   onAddAgents: () => void;
   onAddDevice: () => void;
+  onAddMcp: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -355,6 +361,7 @@ function RightPanelEmptyState(props: {
   pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
   deviceAvailable: boolean;
+  mcpAvailable: boolean;
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
   const [highlight, setHighlight] = useState(-1);
@@ -424,6 +431,15 @@ function RightPanelEmptyState(props: {
       available: props.deviceAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.device,
       onClick: props.onAddDevice,
+    },
+    {
+      label: "MCP servers",
+      description: "See which MCP servers this session has and their status.",
+      icon: Plug,
+      shortcut: "S",
+      available: props.mcpAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.mcp,
+      onClick: props.onAddMcp,
     },
   ] as const;
 
@@ -635,6 +651,8 @@ function surfaceTitle(
       return "Pull requests";
     case "agents":
       return "Agents";
+    case "mcp":
+      return "MCP";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -720,6 +738,8 @@ function SurfaceIcon({
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "agents":
       return <BotIcon className="size-3 shrink-0" />;
+    case "mcp":
+      return <Plug className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -1017,6 +1037,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.deviceAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.device,
       onClick: props.onAddDevice,
+    },
+    {
+      label: "MCP servers",
+      icon: Plug,
+      shortcut: "S",
+      available: props.mcpAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.mcp,
+      onClick: props.onAddMcp,
     },
   ] as const;
 
@@ -1511,6 +1539,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequests={props.onAddPullRequests}
             onAddAgents={props.onAddAgents}
             onAddDevice={props.onAddDevice}
+            onAddMcp={props.onAddMcp}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
@@ -1519,6 +1548,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             pullRequestsAvailable={props.pullRequestsAvailable}
             agentsAvailable={props.agentsAvailable}
             deviceAvailable={props.deviceAvailable}
+            mcpAvailable={props.mcpAvailable}
           />
         ) : (
           props.children

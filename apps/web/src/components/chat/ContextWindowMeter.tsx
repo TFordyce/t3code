@@ -2,11 +2,16 @@ import { Button } from "../ui/button";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
+  deriveContextWindowBreakdownSegments,
+  formatContextWindowCacheHitRate,
   formatContextWindowCompactionMessage,
   formatContextWindowCost,
 } from "./ContextWindowMeter.logic";
 import { Minimize2Icon } from "lucide-react";
 import { composerFloatingLayerProps } from "./composerEventScope";
+
+// Opacities of the bar's color, one per breakdown category, strongest first.
+const BREAKDOWN_SHADES = [92, 70, 52, 38, 28, 20];
 
 function formatPercentage(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) {
@@ -34,9 +39,15 @@ export function ContextWindowMeter(props: {
   const totalProcessedTokens = usage.totalProcessedTokens ?? null;
   const showTotalProcessed = totalProcessedTokens !== null && totalProcessedTokens > 0;
   const isOverloaded = normalizedPercentage > 90;
-  const usageColor = isOverloaded
-    ? "var(--color-error)"
-    : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
+  const barColor = isOverloaded ? "var(--color-error)" : "var(--color-muted-foreground)";
+  const usageColor = isOverloaded ? barColor : `color-mix(in oklab, ${barColor} 72%, transparent)`;
+  const cacheHitRate = formatContextWindowCacheHitRate(usage);
+  const segments =
+    usage.maxTokens !== null
+      ? deriveContextWindowBreakdownSegments(usage.breakdown, normalizedPercentage)
+      : null;
+  const segmentColor = (index: number) =>
+    `color-mix(in oklab, ${barColor} ${BREAKDOWN_SHADES[index % BREAKDOWN_SHADES.length]}%, transparent)`;
 
   return (
     <Popover>
@@ -122,11 +133,48 @@ export function ContextWindowMeter(props: {
               aria-valuenow={Math.round(normalizedPercentage)}
               aria-label="Context window usage"
             >
-              <div
-                className="h-full rounded-full transition-[width,background-color] duration-500 ease-out motion-reduce:transition-none"
-                style={{ width: `${normalizedPercentage}%`, backgroundColor: usageColor }}
-              />
+              {segments ? (
+                <div className="flex h-full">
+                  {segments.map((segment, index) => (
+                    <div
+                      key={`${index}:${segment.name}`}
+                      className="h-full first:rounded-l-full last:rounded-r-full transition-[width,background-color] duration-500 ease-out motion-reduce:transition-none"
+                      style={{
+                        width: `${segment.widthPercentage}%`,
+                        backgroundColor: segmentColor(index),
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div
+                  className="h-full rounded-full transition-[width,background-color] duration-500 ease-out motion-reduce:transition-none"
+                  style={{ width: `${normalizedPercentage}%`, backgroundColor: usageColor }}
+                />
+              )}
             </div>
+          ) : null}
+          {segments ? (
+            <ul className="flex flex-col gap-1 text-2xs leading-4">
+              {segments.map((segment, index) => (
+                <li
+                  key={`${index}:${segment.name}`}
+                  className="flex items-center justify-between gap-3"
+                >
+                  <span className="flex min-w-0 items-center gap-1.5 text-secondary-label">
+                    <span
+                      aria-hidden="true"
+                      className="size-1.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: segmentColor(index) }}
+                    />
+                    <span className="truncate">{segment.name}</span>
+                  </span>
+                  <span className="font-medium tabular-nums text-secondary-label">
+                    {formatContextWindowTokens(segment.tokens)}
+                  </span>
+                </li>
+              ))}
+            </ul>
           ) : null}
           {showTotalProcessed ? (
             <div className="flex items-center justify-between gap-3 text-2xs leading-4">
@@ -134,6 +182,12 @@ export function ContextWindowMeter(props: {
               <span className="font-medium tabular-nums text-secondary-label">
                 {formatContextWindowTokens(totalProcessedTokens)}
               </span>
+            </div>
+          ) : null}
+          {cacheHitRate !== null ? (
+            <div className="flex items-center justify-between gap-3 text-2xs leading-4">
+              <span className="text-secondary-label">Cache hits (last request)</span>
+              <span className="font-medium tabular-nums text-secondary-label">{cacheHitRate}</span>
             </div>
           ) : null}
           {usage.cost != null ? (

@@ -8,6 +8,8 @@ import type {
   Session as OpenCodeSession,
   Todo as OpenCodeTodo,
   ToolPart,
+  McpLocalConfig,
+  McpRemoteConfig,
 } from "@opencode-ai/sdk/v2";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
@@ -15,6 +17,7 @@ import { causeErrorTag } from "@t3tools/shared/observability";
 import {
   defaultInstanceIdForDriver,
   type ModelSelection,
+  type McpSessionServerStatus,
   type OrchestrationV2AppThread,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
@@ -56,7 +59,9 @@ import * as Stream from "effect/Stream";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
+import { openCodeMcpStatus } from "./mcpStatus.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
   structuralProtocolMethod,
@@ -157,6 +162,7 @@ const OpenCodeProviderCapabilitiesV2 = {
     emitsToolCompleted: true,
     emitsToolOutput: true,
     supportsMcpTools: true,
+    userMcpTransports: ["stdio", "http"],
     supportsDynamicToolCallbacks: false,
   },
   approvals: {
@@ -617,6 +623,7 @@ const OPENCODE_RESTRICTED_PERMISSIONS = [
  */
 export function openCodePermissionRules(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+  userMcpRules: PermissionRuleset = [],
 ): PermissionRuleset {
   const sandboxPolicy = recordValue(runtimePolicy, "sandboxPolicy");
   const sandboxType = recordString(sandboxPolicy, "type");
@@ -633,7 +640,7 @@ export function openCodePermissionRules(
     sandboxType === undefined && runtimePolicy.runtimeMode === "full-access";
 
   if (!requiresApproval && (externallySandboxed || dangerFullAccess || implicitFullAccess)) {
-    return [{ permission: "*", pattern: "*", action: "allow" }];
+    return [{ permission: "*", pattern: "*", action: "allow" }, ...userMcpRules];
   }
 
   // Task sessions initially inherit only parent deny rules. Seed explicit
@@ -704,7 +711,63 @@ export function openCodePermissionRules(
     }
   }
 
-  return rules;
+  return [...rules, ...userMcpRules];
+}
+
+/**
+ * OpenCode registers the user's servers on its shared server, so their tools
+ * are not T3's to allow. Every tool of a server asks, in every runtime mode:
+ * the rule comes last and the last matching rule wins.
+ */
+function openCodeUserMcpRules(
+  servers: ReadonlyArray<McpProviderSession.UserMcpServer>,
+): PermissionRuleset {
+  return servers.map((server) => ({
+    permission: `${server.name}_*`,
+    pattern: "*",
+    action: "ask" as const,
+  }));
+}
+
+/**
+ * The user servers an OpenCode session registers. An external OpenCode server
+ * cannot reach T3's loopback proxy, so HTTP servers are left out there; stdio
+ * servers are launched by whichever server registers them.
+ */
+export function openCodeUserMcpServers(
+  session: McpProviderSession.McpProviderSessionConfig | undefined,
+  external: boolean,
+): ReadonlyArray<McpProviderSession.UserMcpServer> {
+  return McpProviderSession.userMcpServersFor(
+    session,
+    external ? ["stdio"] : OpenCodeProviderCapabilitiesV2.tools.userMcpTransports,
+  );
+}
+
+/** The `mcp.add` config for a user server; the proxy is reached with the session's bearer. */
+export function openCodeUserMcpConfig(
+  server: McpProviderSession.UserMcpServer,
+  authorizationHeader: string,
+): McpLocalConfig | McpRemoteConfig {
+  return server.transport === "stdio"
+    ? { type: "local", command: [server.command, ...server.args], environment: { ...server.env } }
+    : {
+        type: "remote",
+        url: server.url,
+        headers: { Authorization: authorizationHeader },
+        oauth: false,
+      };
+}
+
+/** Identifies a config, to tell whether a registered server needs adding again. */
+export function openCodeUserMcpConfigKey(config: McpLocalConfig | McpRemoteConfig): string {
+  const pairs = (record: Readonly<Record<string, string>> | undefined) =>
+    Object.entries(record ?? {})
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `${key}=${value}`);
+  return config.type === "local"
+    ? ["local", ...config.command, ...pairs(config.environment)].join(" ")
+    : ["remote", config.url, ...pairs(config.headers)].join(" ");
 }
 
 function permissionRuleEquals(
@@ -727,8 +790,9 @@ function permissionRuleEquals(
 export function openCodeChildPermissionRules(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   nativeChildRules: PermissionRuleset,
+  userMcpRules: PermissionRuleset = [],
 ): PermissionRuleset {
-  const parentRules = openCodePermissionRules(runtimePolicy);
+  const parentRules = openCodePermissionRules(runtimePolicy, userMcpRules);
   const inheritedRules = parentRules.filter(
     (rule) => rule.permission === "external_directory" || rule.action === "deny",
   );
@@ -972,6 +1036,26 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const mcpSession = yield* mcpSessions.read(input.threadId);
         const hasT3Mcp = mcpSession !== undefined && !connection.external;
         const orchestrationSystemPrompt = t3OrchestrationSystemPrompt(hasT3Mcp);
+        const userMcpServers = openCodeUserMcpServers(mcpSession, connection.external);
+        const userMcpRules = openCodeUserMcpRules(userMcpServers);
+        if (mcpSession !== undefined) {
+          // A user server that cannot be added still leaves the session usable.
+          for (const server of userMcpServers) {
+            yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
+              client.mcp.add({
+                name: server.name,
+                config: openCodeUserMcpConfig(server, mcpSession.authorizationHeader),
+              }),
+            ).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Could not add a user MCP server to OpenCode.", {
+                  server: server.name,
+                  cause,
+                }),
+              ),
+            );
+          }
+        }
         if (hasT3Mcp) {
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
@@ -1032,6 +1116,48 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
+
+        // Session MCP status: the user's servers as OpenCode last reported
+        // them. `t3-code` never appears, because only configured user servers
+        // are named.
+        let reportedMcp: ReadonlyArray<McpSessionServerStatus> = [];
+        let publishedMcp = "";
+        const publishMcpStatuses = Effect.gen(function* () {
+          const mcpServers = McpProviderSession.sessionMcpStatuses({
+            config: mcpSession,
+            transports: OpenCodeProviderCapabilitiesV2.tools.userMcpTransports,
+            reported: reportedMcp,
+          });
+          if (mcpServers === undefined) return;
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - change-detection key, never parsed.
+          const key = JSON.stringify(mcpServers);
+          if (key === publishedMcp) return;
+          publishedMcp = key;
+          sessionEntity = { ...sessionEntity, mcpServers, updatedAt: yield* DateTime.now };
+          yield* emitProviderEvent({
+            type: "provider_session.updated",
+            driver: OPENCODE_PROVIDER,
+            providerSession: sessionEntity,
+          });
+        });
+        /** Re-lists the servers' statuses after OpenCode says one changed. */
+        const refreshMcpStatuses = Effect.gen(function* () {
+          if (mcpSession?.userMcp === undefined) return;
+          const listed = yield* OpenCodeRuntime.runOpenCodeSdk("mcp.status", (signal) =>
+            client.mcp.status(undefined, { signal, throwOnError: true }),
+          ).pipe(
+            Effect.timeout("5 seconds"),
+            Effect.map((response) => Object.entries(response.data ?? {})),
+            Effect.catch(() => Effect.succeed(undefined)),
+          );
+          if (listed === undefined) return;
+          reportedMcp = listed.map(([name, status]) => ({
+            name,
+            ...openCodeMcpStatus(status),
+          }));
+          yield* publishMcpStatuses;
+        });
+        yield* publishMcpStatuses;
 
         const logProtocolEvent = makeOpenCodeProtocolLogger({
           nativeEventLogger: options.nativeEventLogger,
@@ -1412,6 +1538,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             const childPermission = openCodeChildPermissionRules(
               turn.runtimePolicy,
               nativeChildSession.permission ?? [],
+              userMcpRules,
             );
             yield* sdkCall(
               "session.update",
@@ -2557,6 +2684,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             method: event.type,
             payload: event,
           });
+          // Newer servers announce a status change; the 1.x event types omit it.
+          if ((event.type as string) === "mcp.status.changed") return yield* refreshMcpStatuses;
           switch (event.type) {
             case "server.connected":
               if (hasConnected) {
@@ -3046,10 +3175,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               // session.create leaves it unset (SessionPrompt.ensureTitle).
               const response = yield* sdkCall(
                 "session.create",
-                { permission: openCodePermissionRules(threadInput.runtimePolicy) },
+                { permission: openCodePermissionRules(threadInput.runtimePolicy, userMcpRules) },
                 () =>
                   client.session.create({
-                    permission: openCodePermissionRules(threadInput.runtimePolicy),
+                    permission: openCodePermissionRules(threadInput.runtimePolicy, userMcpRules),
                   }),
               );
               const nativeSession = unwrapData("session.create", response);
@@ -3610,7 +3739,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 yield* sdkCall("session.update", { sessionID: fork.id }, () =>
                   client.session.update({
                     sessionID: fork.id,
-                    permission: openCodePermissionRules(input.runtimePolicy),
+                    permission: openCodePermissionRules(input.runtimePolicy, userMcpRules),
                   }),
                 );
                 retainedThread = {
