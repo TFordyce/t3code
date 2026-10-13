@@ -62,3 +62,14 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Attachment inventory | The ordered image records shown as thumbnails above the prose, including images with no inline references.                          |
 
 See [composer context references](./composer-context-references.md) for the contract and lifecycle.
+
+## MCP servers
+
+| Term               | Meaning                                                                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| User MCP server    | An MCP server the user configures in T3 Code, given alongside the built-in `t3-code` server to every provider that can carry it.                        |
+| Server check       | T3 Code's own `initialize` and `tools/list` test of a user MCP server, run from the environment host. Its result is the check status shown in settings. |
+| Session MCP status | What a running provider reports about each user MCP server in its session, including servers it skipped and why.                                        |
+| Sign-in            | The OAuth flow that gives a user HTTP MCP server an access token, held on the environment host and never sent to providers.                             |
+
+See [user MCP servers](./mcp-servers.md) for how these fit together.
