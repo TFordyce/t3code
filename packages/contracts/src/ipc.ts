@@ -1209,6 +1209,9 @@ export interface DesktopBridge {
   /** Receives a local OAuth code for a sign-in owned by a remote environment. */
   receiveProviderAuthCallback?: (authorizationUrl: string) => Promise<string>;
   cancelProviderAuthCallback?: (authorizationUrl: string) => Promise<void>;
+  /** Catches an MCP sign-in redirect for a remote environment; resolves with the redirect URL. */
+  receiveMcpSignInCallback?: (authorizationUrl: string) => Promise<string>;
+  cancelMcpSignInCallback?: (authorizationUrl: string) => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
   /**
    * Open a System Settings pane by identifier. Optional: older desktop builds

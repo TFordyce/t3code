@@ -316,3 +316,33 @@ export function selectProjectMcpCheck(
 ): McpServerCheck | undefined {
   return selectMcpServerCheck(config, source === "global" ? "global" : projectId, name);
 }
+
+export type McpSignInRelayResult =
+  | { readonly kind: "completed" }
+  | { readonly kind: "paste"; readonly notice?: string };
+
+/**
+ * Sign in to a server on a remote environment. Desktop catches the browser
+ * redirect on its own loopback and hands it to the host; when it cannot (no
+ * desktop receiver, or the port is busy) the page is opened as usual and the
+ * user pastes the final address instead.
+ */
+export async function relayMcpSignIn(input: {
+  readonly authorizationUrl: string;
+  readonly receive: ((authorizationUrl: string) => Promise<string>) | undefined;
+  readonly openExternal: (url: string) => Promise<unknown>;
+  /** Resolves true when the host accepted the redirect. */
+  readonly complete: (callbackUrl: string) => Promise<boolean>;
+}): Promise<McpSignInRelayResult> {
+  let notice: string | undefined;
+  if (input.receive) {
+    try {
+      const callbackUrl = await input.receive(input.authorizationUrl);
+      return (await input.complete(callbackUrl)) ? { kind: "completed" } : { kind: "paste" };
+    } catch (cause) {
+      notice = cause instanceof Error ? cause.message : undefined;
+    }
+  }
+  await input.openExternal(input.authorizationUrl);
+  return notice === undefined ? { kind: "paste" } : { kind: "paste", notice };
+}

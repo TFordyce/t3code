@@ -200,6 +200,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
   cancelProviderAuthCallback: (url: string) =>
     ipcRenderer.invoke(IpcChannels.CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
+  receiveMcpSignInCallback: (url: string) =>
+    ipcRenderer.invoke(IpcChannels.RECEIVE_MCP_SIGN_IN_CALLBACK_CHANNEL, url),
+  cancelMcpSignInCallback: (url: string) =>
+    ipcRenderer.invoke(IpcChannels.CANCEL_MCP_SIGN_IN_CALLBACK_CHANNEL, url),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   checkSystemPermission: (pane: string) =>
     ipcRenderer.invoke(IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL, pane),

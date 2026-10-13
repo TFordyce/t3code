@@ -14,6 +14,7 @@ import {
   overrideDraftFromEnvironment,
   projectMcpPatch,
   projectMcpRows,
+  relayMcpSignIn,
   providersWithoutMcpSupport,
   saveNotice,
   selectProjectMcpCheck,
@@ -427,5 +428,56 @@ describe("OAuth client in a draft", () => {
     expect(draft.oauthClientSecretRedacted).toBe(false);
     expect(configFromDraft(draft)).toMatchObject({ oauth: { clientId: "abc" } });
     expect(JSON.stringify(configFromDraft(draft))).not.toContain("valueRedacted");
+  });
+});
+
+describe("relayMcpSignIn", () => {
+  const authorizationUrl = "https://auth.example.com/authorize?state=x";
+  const make = (receive: ((url: string) => Promise<string>) | undefined) => {
+    const calls: string[] = [];
+    return {
+      calls,
+      input: {
+        authorizationUrl,
+        receive,
+        openExternal: async (url: string) => {
+          calls.push(`open:${url}`);
+        },
+        complete: async (callbackUrl: string) => {
+          calls.push(`complete:${callbackUrl}`);
+          return true;
+        },
+      },
+    };
+  };
+
+  it("hands the caught redirect to the host so no pasting is needed", async () => {
+    const { calls, input } = make(async () => "http://127.0.0.1:1/callback?code=c&state=s");
+    expect(await relayMcpSignIn(input)).toEqual({ kind: "completed" });
+    expect(calls).toEqual(["complete:http://127.0.0.1:1/callback?code=c&state=s"]);
+  });
+
+  it("falls back to opening the page and pasting when this computer cannot listen", async () => {
+    const { calls, input } = make(async () => {
+      throw new Error("The sign-in callback port is in use on this computer.");
+    });
+    expect(await relayMcpSignIn(input)).toEqual({
+      kind: "paste",
+      notice: "The sign-in callback port is in use on this computer.",
+    });
+    expect(calls).toEqual([`open:${authorizationUrl}`]);
+  });
+
+  it("opens the page and pastes when there is no desktop receiver", async () => {
+    const { calls, input } = make(undefined);
+    expect(await relayMcpSignIn(input)).toEqual({ kind: "paste" });
+    expect(calls).toEqual([`open:${authorizationUrl}`]);
+  });
+
+  it("keeps the paste field when the host rejects the relayed redirect", async () => {
+    const { input } = make(async () => "http://127.0.0.1:1/callback?code=c&state=s");
+    expect(await relayMcpSignIn({ ...input, complete: async () => false })).toEqual({
+      kind: "paste",
+    });
   });
 });
