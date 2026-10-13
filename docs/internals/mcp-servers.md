@@ -2,17 +2,17 @@
 
 The loopback proxy is the only path for user HTTP servers. Keep it that way.
 
-A provider is handed `/mcp-proxy/<name>` on the T3 MCP endpoint, plus the session's own `t3-code`
-bearer. It never gets the upstream URL or the entry's headers. Each request is checked against
-the grant the session started with, then against live settings, so a removed, disabled or
-re-pointed server is cut off mid-session. Headers and OAuth tokens are added on the host by
-[`McpUpstream`](../../apps/server/src/mcp/McpUpstream.ts), and
+A provider gets `/mcp-proxy/<name>` on the T3 MCP endpoint, plus the session's own `t3-code`
+bearer. It never gets the upstream URL or the entry's headers. The proxy checks each request
+against the grant the session started with, then against live settings, so a removed, disabled
+or re-pointed server is cut off mid-session. [`McpUpstream`](../../apps/server/src/mcp/McpUpstream.ts)
+adds headers and OAuth tokens on the host, and
 [`McpProxy`](../../apps/server/src/mcp/McpProxy.ts) forwards the response.
-Sign-in tokens live in the environment's secret store, read on each request by
-[`McpSignIn`](../../apps/server/src/mcp/McpSignIn.ts).
+Sign-in tokens live in the environment's secret store, and
+[`McpSignIn`](../../apps/server/src/mcp/McpSignIn.ts) reads them on each request.
 
-The reason is that the proxy keeps two things in one place that would otherwise be duplicated
-per provider, and each duplicate would drift:
+The proxy keeps two things in one place. Duplicating them per provider would let each copy
+drift:
 
 - **Credentials.** A provider never holds a token, so signing out or changing a header takes
   effect at once, including in sessions already running. Injecting headers into a provider's

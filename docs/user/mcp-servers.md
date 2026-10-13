@@ -5,7 +5,7 @@ Add one once in T3 Code and every provider that supports it gets it, so you don'
 edit each provider's own config.
 
 Manage them in **Settings > MCP servers**. T3 Code's built-in `t3-code` server is always
-present and is not listed as one of yours.
+present, and the list doesn't include it.
 
 ## Add a server
 
@@ -20,8 +20,8 @@ Names are lowercase letters, digits, `_` and `-`, up to 32 characters. Names sta
 secrets and sign-in stay attached to it.
 
 Mark an environment variable or header as sensitive to store its value on the environment's
-host. A saved secret shows as **Stored securely** and is never displayed again. When you edit
-the server, leave that field alone to keep the value.
+host. A saved secret shows as **Stored securely**, and T3 Code never shows the value again.
+When you edit the server, leave that field alone to keep the value.
 
 Each server shows a check result, such as **Connected · 41 tools**, **Needs sign-in**, or
 **Failed** with the error. T3 Code checks a server when you save it. Use **Re-check** to
@@ -73,17 +73,16 @@ environment's sign-in.
 Changes apply to new sessions. A session that is already running keeps the servers it started
 with. The page says so after each save.
 
-OpenCode is the exception: it shares one server per directory, so OpenCode sessions in the
+OpenCode is the exception. It shares one server per directory, so OpenCode sessions in the
 project pick up changes right away.
 
 ## Which providers can use servers
 
-| Provider                              | User MCP servers                                                             |
-| ------------------------------------- | ---------------------------------------------------------------------------- |
-| Codex, Claude, Cursor, OpenCode, Muse | Stdio and HTTP                                                               |
-| ACP agents                            | Stdio and HTTP                                                               |
-| Pi                                    | Stdio and HTTP with Pi 0.99 or newer. Older Pi versions can't carry them.    |
-| Grok, Antigravity                     | Not supported. The server list shows **Not available in Grok, Antigravity**. |
+| Provider                                          | User MCP servers                                                             |
+| ------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Codex, Claude, Cursor, OpenCode, Muse, ACP agents | Stdio and HTTP                                                               |
+| Pi                                                | Stdio and HTTP with Pi 0.99 or newer. Older Pi versions can't carry them.    |
+| Grok, Antigravity                                 | Not supported. The server list shows **Not available in Grok, Antigravity**. |
 
 If a provider can't carry a server, the session doesn't get it. Use a supported provider for
 work that needs it.
