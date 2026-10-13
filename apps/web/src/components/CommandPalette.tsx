@@ -48,6 +48,7 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  BotIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -2023,6 +2024,19 @@ function OpenCommandPaletteDialog(props: {
 
   if (activeThread !== null) {
     const thread = activeThread;
+    actionItems.push({
+      kind: "action",
+      value: "action:open-thread-agents",
+      searchTerms: ["agents", "subagents", "forks", "lineage"],
+      title: "Show agents",
+      icon: <BotIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "agents.toggle",
+      run: async () => {
+        useRightPanelStore
+          .getState()
+          .open(scopeThreadRef(thread.environmentId, thread.id), "agents");
+      },
+    });
     actionItems.push({
       kind: "action",
       value: "action:restart-agent-session",

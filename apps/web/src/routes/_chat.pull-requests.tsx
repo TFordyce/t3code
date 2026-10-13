@@ -2253,6 +2253,7 @@ function PullRequestsRouteView() {
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
             onAddPullRequests={() => undefined}
+            onAddAgents={() => undefined}
             onAddDevice={() => undefined}
             onAddMcp={() => undefined}
             browserAvailable={false}
@@ -2261,6 +2262,7 @@ function PullRequestsRouteView() {
             filesAvailable={false}
             pullRequestAvailable={false}
             pullRequestsAvailable={false}
+            agentsAvailable={false}
             deviceAvailable={false}
             mcpAvailable={false}
             pullRequestStatusSeeds={listedPullRequestTabStatuses}
