@@ -120,6 +120,7 @@ export const CursorProviderCapabilitiesV2 = {
     emitsToolCompleted: true,
     emitsToolOutput: true,
     supportsMcpTools: true,
+    userMcpTransports: ["stdio", "http"],
     supportsDynamicToolCallbacks: false,
   },
   approvals: {
@@ -215,6 +216,41 @@ export function cursorMcpServers(
         Authorization: session.authorizationHeader,
       },
     },
+    ...Object.fromEntries(
+      McpProviderSession.userMcpServersFor(
+        session,
+        CursorProviderCapabilitiesV2.tools.userMcpTransports,
+      ).map((server): [string, McpServerConfig] => [
+        server.name,
+        server.transport === "http"
+          ? {
+              type: "http",
+              url: server.url,
+              headers: { Authorization: session.authorizationHeader },
+            }
+          : {
+              type: "stdio",
+              command: server.command,
+              args: [...server.args],
+              env: { ...server.env },
+            },
+      ]),
+    ),
+  };
+}
+
+/**
+ * Options for `send()`. They never carry `mcpServers`: a send-time override
+ * replaces the workspace lease and turns off the project, user and plugin MCP
+ * servers the agent loaded. MCP servers go on `Agent.create` and `Agent.resume`.
+ */
+export function cursorSendOptions(input: {
+  readonly modelSelection: ModelSelection;
+  readonly interactionMode: string;
+}) {
+  return {
+    model: cursorSdkModelSelection(input.modelSelection),
+    mode: input.interactionMode === "plan" ? ("plan" as const) : ("agent" as const),
   };
 }
 
@@ -2208,11 +2244,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             let context: ActiveCursorTurn | null = null;
             const sdkRun = yield* agent.session.send({
               message,
-              options: {
-                model: cursorSdkModelSelection(turnInput.modelSelection),
-                mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
-                ...(mcpServers === undefined ? {} : { mcpServers }),
-              },
+              options: cursorSendOptions({
+                modelSelection: turnInput.modelSelection,
+                interactionMode: turnInput.runtimePolicy.interactionMode,
+              }),
               onDelta: (update) => {
                 if (context === null) {
                   return Effect.sync(() => {

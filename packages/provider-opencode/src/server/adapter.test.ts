@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { OpencodeClient, ToolPart } from "@opencode-ai/sdk/v2";
 import {
   CheckpointId,
+  EnvironmentId,
   NodeId,
   ProjectId,
   ProviderInstanceId,
@@ -37,6 +38,7 @@ import type * as ProviderEventLoggers from "@t3tools/provider-core/server/Provid
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import type * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 
 import {
   advanceOpenCodePromptAdmission,
@@ -148,9 +150,25 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
   suffix: string,
   nativeSessionId: string,
   client: object,
+  options: {
+    readonly external?: boolean;
+    readonly userMcp?: McpProviderSession.UserMcpSessionServers;
+  } = {},
 ) {
   const instanceId = ProviderInstanceId.make(`opencode-${suffix}`);
   const threadId = ThreadId.make(`thread-opencode-${suffix}`);
+  if (options.userMcp !== undefined) {
+    yield* (yield* McpProviderSessions.McpProviderSessions).set({
+      environmentId: EnvironmentId.make(`environment-opencode-${suffix}`),
+      threadId,
+      providerSessionId: `mcp-session-opencode-${suffix}`,
+      providerInstanceId: instanceId,
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer user-mcp-token",
+      browserToolsAvailable: false,
+      userMcp: options.userMcp,
+    });
+  }
   const modelSelection = {
     instanceId,
     model: "anthropic/claude-sonnet",
@@ -163,7 +181,12 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
     environment: {},
   }).pipe(
     Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
-      connectToOpenCodeServer: () => Effect.succeed({ url: "http://test.invalid", external: true }),
+      connectToOpenCodeServer: () =>
+        Effect.succeed({
+          url: "http://test.invalid",
+          external: options.external ?? true,
+          exitCode: options.external === false ? Effect.never : null,
+        }),
       createOpenCodeSdkClient: () => client,
     } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"]),
     Effect.provideService(ProviderHost.ProviderHost, {
@@ -2295,6 +2318,174 @@ describe("OpenCodeAdapterV2", () => {
       assert.lengthOf(terminals, 1);
       assert.equal(terminals[0]?.status, "completed");
       assert.isNull(terminals[0]?.failure ?? null);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect.each([false, true])(
+    "registers user MCP servers with an ask rule, skipping http on an external server (external=%s)",
+    (external) =>
+      Effect.gen(function* () {
+        const nativeSessionId = `native-opencode-user-mcp-${external}`;
+        const added: Array<unknown> = [];
+        const created: Array<unknown> = [];
+        const nativeEvents = asyncEventStream();
+        const client = {
+          event: {
+            subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+              options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
+              return { stream: nativeEvents.stream };
+            },
+          },
+          session: {
+            create: async (input: unknown) => {
+              created.push(input);
+              return { data: { id: nativeSessionId, time: { created: 1, updated: 1 } } };
+            },
+          },
+          mcp: {
+            add: async (input: unknown) => {
+              added.push(input);
+              return { data: true };
+            },
+          },
+        };
+        yield* makeOpenCodeRuntimeHarness(`user-mcp-${external}`, nativeSessionId, client, {
+          external,
+          userMcp: {
+            servers: [
+              {
+                name: "files",
+                transport: "stdio",
+                command: "npx",
+                args: ["-y", "files"],
+                env: { K: "v" },
+              },
+              {
+                name: "docs",
+                transport: "http",
+                url: "http://127.0.0.1:43123/mcp-proxy/docs",
+                upstreamUrlFingerprint: "fp",
+              },
+            ],
+            skipped: [],
+          },
+        });
+        const files = {
+          name: "files",
+          config: { type: "local", command: ["npx", "-y", "files"], environment: { K: "v" } },
+        };
+        const docs = {
+          name: "docs",
+          config: {
+            type: "remote",
+            url: "http://127.0.0.1:43123/mcp-proxy/docs",
+            headers: { Authorization: "Bearer user-mcp-token" },
+            oauth: false,
+          },
+        };
+        const t3Code = {
+          name: "t3-code",
+          config: {
+            type: "remote",
+            url: "http://127.0.0.1:43123/mcp",
+            headers: { Authorization: "Bearer user-mcp-token" },
+            oauth: false,
+          },
+        };
+        assert.deepEqual(added, external ? [files] : [files, docs, t3Code]);
+        const rules = (
+          created[0] as {
+            permission: ReadonlyArray<{ permission: string; pattern: string; action: string }>;
+          }
+        ).permission;
+        const asks = (name: string) =>
+          rules.filter((rule) => rule.permission === `${name}_*` && rule.action === "ask");
+        assert.lengthOf(asks("files"), 1);
+        assert.lengthOf(asks("docs"), external ? 0 : 1);
+        assert.deepEqual(rules.at(-1), {
+          permission: external ? "files_*" : "docs_*",
+          pattern: "*",
+          action: "ask",
+        });
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect("re-lists MCP status on a change event and publishes it without t3-code", () =>
+    Effect.gen(function* () {
+      const nativeSessionId = "native-opencode-mcp-session-status";
+      const nativeEvents = asyncEventStream();
+      const client = {
+        event: {
+          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+            options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
+            return { stream: nativeEvents.stream };
+          },
+        },
+        session: {
+          create: async () => ({ data: { id: nativeSessionId, time: { created: 1, updated: 1 } } }),
+        },
+        mcp: {
+          add: async () => ({ data: true }),
+          status: async () => ({
+            data: {
+              "t3-code": { status: "connected" },
+              files: { status: "pending" },
+              docs: { status: "needs_auth" },
+            },
+          }),
+        },
+      };
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        "mcp-session-status",
+        nativeSessionId,
+        client,
+        {
+          external: false,
+          userMcp: {
+            servers: [
+              { name: "files", transport: "stdio", command: "files", args: [], env: {} },
+              {
+                name: "docs",
+                transport: "http",
+                url: "http://127.0.0.1:43123/mcp-proxy/docs",
+                upstreamUrlFingerprint: "fp",
+              },
+            ],
+            skipped: [{ name: "vault", reason: "secret-unavailable" }],
+          },
+        },
+      );
+      const lists = yield* harness.runtime.events.pipe(
+        Stream.flatMap((event) =>
+          event.type === "provider_session.updated" &&
+          event.providerSession.mcpServers !== undefined
+            ? Stream.make(event.providerSession.mcpServers)
+            : Stream.empty,
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* Effect.promise(() =>
+        nativeEvents.push({ type: "mcp.status.changed", properties: { server: "docs" } }),
+      );
+      const received = yield* Fiber.join(lists);
+      assert.deepEqual(received[0], [
+        { name: "files", status: "unknown" },
+        { name: "docs", status: "unknown" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
+      ]);
+      assert.deepEqual(received[1], [
+        { name: "files", status: "connecting" },
+        { name: "docs", status: "needs-auth" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
+      ]);
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,

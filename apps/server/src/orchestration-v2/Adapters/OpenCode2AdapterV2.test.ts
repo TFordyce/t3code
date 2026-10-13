@@ -154,8 +154,8 @@ const withInstructions = (
         "skill.list",
       ].includes(String(entry.frame.type)),
   );
-  // T3's MCP server is added before the entry that describes it.
-  const after = entries.findIndex(
+  // T3's MCP server, then the user's, are added before the entry that describes them.
+  const after = entries.findLastIndex(
     (entry, index) =>
       index < first &&
       entry.type === "emit_inbound" &&
@@ -2709,6 +2709,227 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
         yield* runtime.startTurn(turnInput(thread));
         assert.equal((yield* Fiber.join(terminal))?.status, "completed");
+        yield* runtime.unloadThread!({ providerThread: thread });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "registers the user's MCP servers for the directory with an ask rule on each, and takes a removed one off",
+    () =>
+      Effect.gen(function* () {
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        const session = {
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId,
+          providerSessionId: "mcp:opencode2-adapter",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          authorizationHeader: "Bearer thread-credential",
+          browserToolsAvailable: false,
+        };
+        yield* mcpSessions.set({
+          ...session,
+          userMcp: {
+            servers: [
+              {
+                name: "files",
+                transport: "stdio",
+                command: "npx",
+                args: ["-y", "files"],
+                env: { K: "v" },
+              },
+              {
+                name: "docs",
+                transport: "http",
+                url: "http://127.0.0.1:3773/mcp-proxy/docs",
+                upstreamUrlFingerprint: "fp",
+              },
+            ],
+            skipped: [],
+          },
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadId));
+        const server = "t3-code-thread_opencode2-adapter";
+        const { runtime, thread } = yield* resumed([
+          out("session.update", {
+            sessionID: SESSION,
+            permissions: [
+              ...t3Rules,
+              { action: "files_*", resource: "*", effect: "ask" },
+              { action: "docs_*", resource: "*", effect: "ask" },
+            ],
+          }),
+          reply("session.update", null),
+          out("mcp.add", {
+            server,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp",
+              headers: { Authorization: "Bearer thread-credential" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: "files",
+            "location[directory]": WORK,
+            config: { type: "local", command: ["npx", "-y", "files"], environment: { K: "v" } },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: "docs",
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp-proxy/docs",
+              headers: { Authorization: "Bearer thread-credential" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // The user dropped "docs" in Settings: the next turn takes it off and leaves "files".
+          out("session.update", {
+            sessionID: SESSION,
+            permissions: [...t3Rules, { action: "files_*", resource: "*", effect: "ask" }],
+          }),
+          reply("session.update", null),
+          out("mcp.remove", { server: "docs", "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          out("mcp.remove", { server, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+        ]);
+        const terminals = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        yield* runtime.startTurn(turnInput(thread));
+        assert.equal((yield* Fiber.join(terminals))?.status, "completed");
+        yield* mcpSessions.set({
+          ...session,
+          userMcp: {
+            servers: [
+              {
+                name: "files",
+                transport: "stdio",
+                command: "npx",
+                args: ["-y", "files"],
+                env: { K: "v" },
+              },
+            ],
+            skipped: [],
+          },
+        });
+        const second = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        yield* runtime.startTurn(turnInput(thread));
+        assert.equal((yield* Fiber.join(second))?.status, "completed");
+        yield* runtime.unloadThread!({ providerThread: thread });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "re-lists MCP servers on a status change and publishes the mapped list without t3-code",
+    () =>
+      Effect.gen(function* () {
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId,
+          providerSessionId: "mcp:opencode2-adapter",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          authorizationHeader: "Bearer thread-credential",
+          browserToolsAvailable: false,
+          userMcp: {
+            servers: [
+              {
+                name: "files",
+                transport: "stdio",
+                command: "npx",
+                args: ["-y", "files"],
+                env: {},
+              },
+              {
+                name: "docs",
+                transport: "http",
+                url: "http://127.0.0.1:3773/mcp-proxy/docs",
+                upstreamUrlFingerprint: "fp",
+              },
+            ],
+            skipped: [{ name: "vault", reason: "secret-unavailable" }],
+          },
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadId));
+        const server = "t3-code-thread_opencode2-adapter";
+        const { runtime, thread } = yield* resumed([
+          out("session.update", {
+            sessionID: SESSION,
+            permissions: [
+              ...t3Rules,
+              { action: "files_*", resource: "*", effect: "ask" },
+              { action: "docs_*", resource: "*", effect: "ask" },
+            ],
+          }),
+          reply("session.update", null),
+          out("mcp.add", "<any>"),
+          reply("mcp.add", null),
+          out("mcp.add", "<any>"),
+          reply("mcp.add", null),
+          out("mcp.add", "<any>"),
+          reply("mcp.add", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          {
+            type: "emit_inbound",
+            frame: {
+              type: "sdk.event",
+              event: {
+                id: "evt_mcpstatuschanged0000",
+                created: 1,
+                type: "mcp.status.changed",
+                data: { server: "docs" },
+              },
+            },
+          },
+          out("mcp.list", { "location[directory]": WORK }),
+          reply("mcp.list", {
+            location: { directory: WORK },
+            data: [
+              { name: server, status: { status: "connected" } },
+              { name: "files", status: { status: "pending" } },
+              { name: "docs", status: { status: "needs_auth", error: "sign in" } },
+            ],
+          }),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          out("mcp.remove", { server, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+        ]);
+        const updates = yield* runtime.events.pipe(
+          Stream.takeUntil((item) => item.type === "turn.terminal"),
+          Stream.flatMap((item) =>
+            item.type === "provider_session.updated" &&
+            item.providerSession.mcpServers !== undefined
+              ? Stream.make(item.providerSession.mcpServers)
+              : Stream.empty,
+          ),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* runtime.startTurn(turnInput(thread));
+        const lists = yield* Fiber.join(updates);
+        assert.deepEqual(lists.at(0), [
+          { name: "files", status: "unknown" },
+          { name: "docs", status: "unknown" },
+          { name: "vault", status: "failed", error: "secret unavailable" },
+        ]);
+        assert.deepEqual(lists.at(-1), [
+          { name: "files", status: "connecting" },
+          { name: "docs", status: "needs-auth" },
+          { name: "vault", status: "failed", error: "secret unavailable" },
+        ]);
         yield* runtime.unloadThread!({ providerThread: thread });
       }).pipe(Effect.scoped),
   );

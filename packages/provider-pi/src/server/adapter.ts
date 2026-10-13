@@ -64,6 +64,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -91,9 +92,11 @@ import {
 import {
   buildPiRpcLaunch,
   materializePiT3McpExtension,
+  piUserMcpTransports,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS } from "./mcpExtensionSource.ts";
+import { detectPiVersion } from "./status.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 const PI_DRIVER_KIND = PI_PROVIDER;
@@ -158,6 +161,9 @@ const PiProviderCapabilitiesV2 = {
     emitsToolCompleted: true,
     emitsToolOutput: true,
     supportsMcpTools: true,
+    // Overridden per installed version by the adapter: user servers register
+    // through `pi.registerMcpServer`, which Pi gained in 0.99.
+    userMcpTransports: [] as Array<"stdio" | "http">,
     supportsDynamicToolCallbacks: false,
   },
   approvals: {
@@ -223,6 +229,8 @@ export interface PiAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: PiSettings;
   readonly environment: NodeJS.ProcessEnv;
+  /** Reads the installed Pi's version; defaults to running `pi --version`. */
+  readonly detectVersion?: Effect.Effect<string | null>;
   /**
    * Where to offer a wake turn for provider-initiated work. Without one, such
    * work has no owner and the adapter stops it.
@@ -395,6 +403,23 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { continuationRequests } = options;
 
+  // Read once, on first use: only Pi 0.99 and later can register user servers.
+  const detectedVersion = yield* Effect.cached(
+    options.detectVersion ??
+      detectPiVersion(options.settings, options.environment).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      ),
+  );
+  const capabilities = detectedVersion.pipe(
+    Effect.map((version): typeof PiProviderCapabilitiesV2 => ({
+      ...PiProviderCapabilitiesV2,
+      tools: {
+        ...PiProviderCapabilitiesV2.tools,
+        userMcpTransports: [...piUserMcpTransports(version)],
+      },
+    })),
+  );
+
   const protocolError = (detail: string, payload?: unknown) =>
     new ProviderAdapter.ProviderAdapterProtocolError({
       driver: PI_PROVIDER,
@@ -405,7 +430,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
     driver: PI_PROVIDER,
-    getCapabilities: () => Effect.succeed(PiProviderCapabilitiesV2),
+    getCapabilities: () => capabilities,
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
     openSession: Effect.fn("PiAdapterV2.openSession")(function* (
       input: ProviderAdapter.ProviderAdapterV2OpenSessionInput,
@@ -413,6 +438,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       const scope = yield* Effect.scope;
       const cwd = input.runtimePolicy.cwd ?? host.paths.cwd;
       const mcpSession = yield* mcpSessions.read(input.threadId);
+      // Only a session that has user servers pays for reading Pi's version.
+      const sessionCapabilities =
+        (mcpSession?.userMcp?.servers.length ?? 0) > 0
+          ? yield* capabilities
+          : PiProviderCapabilitiesV2;
       const provideCacheFs = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) =>
         effect.pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -440,6 +470,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         environment: options.environment,
         mcpSession,
         extensionPath,
+        userMcpServers: McpProviderSession.userMcpServersFor(
+          mcpSession,
+          sessionCapabilities.tools.userMcpTransports,
+        ),
         runtimeMode: input.runtimePolicy.runtimeMode,
       });
       const scopedLaunch = yield* agentScope.wrap({
@@ -473,7 +507,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         status: "ready",
         cwd,
         model: input.modelSelection.model,
-        capabilities: PiProviderCapabilitiesV2,
+        capabilities: sessionCapabilities,
         createdAt: now,
         updatedAt: now,
         lastError: null,

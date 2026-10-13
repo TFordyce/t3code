@@ -575,6 +575,10 @@ export const AcpProviderCapabilitiesV2 = {
     emitsToolCompleted: true,
     emitsToolOutput: true,
     supportsMcpTools: false,
+    // Stdio servers are ACP's baseline; http servers reach the agent through the
+    // stdio bridge pointed at T3's loopback proxy. Flavors that cannot carry
+    // user servers (Grok, Antigravity) override this with `[]`.
+    userMcpTransports: ["stdio", "http"],
     supportsDynamicToolCallbacks: false,
   },
   approvals: {
@@ -678,13 +682,43 @@ interface AcpMcpContext {
   readonly authorization?: string;
 }
 
+/** A user server as the agent spawns it: stdio as configured, http via the bridge to the proxy. */
+function acpUserMcpServer(
+  server: McpProviderSession.UserMcpServer,
+  self: SelfInvocation,
+  authorization: string,
+): EffectAcpSchema.McpServer {
+  if (server.transport === "stdio") {
+    return {
+      name: server.name,
+      command: server.command,
+      args: [...server.args],
+      env: Object.entries(server.env).map(([name, value]) => ({ name, value })),
+    };
+  }
+  return {
+    name: server.name,
+    command: self.command,
+    args: [...selfInvocationArgs(self, ["acp-mcp-bridge"])],
+    env: [
+      { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+      { name: "T3_ACP_MCP_ENDPOINT", value: server.url },
+      { name: "T3_ACP_MCP_AUTHORIZATION", value: authorization },
+    ],
+  };
+}
+
 function acpMcpContext(
   session: McpProviderSession.McpProviderSessionConfig | undefined,
   self: SelfInvocation,
+  userMcpTransports: ReadonlyArray<McpProviderSession.UserMcpServer["transport"]>,
 ): AcpMcpContext {
   if (session === undefined) {
     return { servers: [], acpServers: [] };
   }
+  const userServers = McpProviderSession.userMcpServersFor(session, userMcpTransports).map(
+    (server) => acpUserMcpServer(server, self, session.authorizationHeader),
+  );
   // Stdio is ACP's required baseline MCP transport. Agents that advertise
   // optional http support still routinely fail to wire injected http servers
   // through to their backend (codex-acp 1.2.0 and pi-acp both drop them), so
@@ -703,8 +737,12 @@ function acpMcpContext(
           { name: "T3_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
         ],
       },
+      ...userServers,
     ],
-    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+    // MCP-over-ACP only reaches the t3-code endpoint, so user servers ride along
+    // as ordinary entries; the runtime sends this list instead of `servers`
+    // whenever the agent advertises `mcpCapabilities.acp`.
+    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }, ...userServers],
     endpoint: session.endpoint,
     authorization: session.authorizationHeader,
     processEnvironment: {
@@ -1494,8 +1532,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   const { flavor, selfInvocation: self } = options;
   const readMcpContext = (threadId: ThreadId | null) =>
     threadId === null
-      ? Effect.succeed(acpMcpContext(undefined, self))
-      : mcpSessions.read(threadId).pipe(Effect.map((session) => acpMcpContext(session, self)));
+      ? Effect.succeed(acpMcpContext(undefined, self, []))
+      : mcpSessions
+          .read(threadId)
+          .pipe(
+            Effect.map((session) =>
+              acpMcpContext(session, self, flavor.capabilities.tools.userMcpTransports),
+            ),
+          );
   const driver = flavor.driver;
   const continuationRequests = options.continuationRequests;
   const postSettleContinuationEnabled =

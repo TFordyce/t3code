@@ -147,6 +147,10 @@
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
     },
+    "./mcpServers": {
+      "types": "./src/mcpServers.ts",
+      "import": "./src/mcpServers.ts"
+    },
     "./projectSettings": {
       "types": "./src/projectSettings.ts",
       "import": "./src/projectSettings.ts"
@@ -410,6 +414,14 @@
     "./codexAuthCallback": {
       "types": "./src/codexAuthCallback.ts",
       "import": "./src/codexAuthCallback.ts"
+    },
+    "./loopbackOAuthCallback": {
+      "types": "./src/loopbackOAuthCallback.ts",
+      "import": "./src/loopbackOAuthCallback.ts"
+    },
+    "./mcpSignInCallback": {
+      "types": "./src/mcpSignInCallback.ts",
+      "import": "./src/mcpSignInCallback.ts"
     },
     "./codexAuthHandoff": {
       "types": "./src/codexAuthHandoff.ts",

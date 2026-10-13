@@ -23,6 +23,7 @@ import {
   ResolvedKeybindingsConfig,
 } from "./keybindings.ts";
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
+import { McpServerChecks } from "./mcpServers.ts";
 import { ModelCapabilities } from "./model.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
@@ -265,6 +266,9 @@ export const ServerProvider = Schema.Struct({
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
+  // Transports of user MCP servers this driver's sessions carry. Absent when
+  // the server could not tell, which clients must not read as "none".
+  userMcpTransports: Schema.optional(ForwardCompatibleArray(Schema.Literals(["stdio", "http"]))),
   setup: Schema.optional(
     Schema.Struct({
       canAuthenticate: Schema.Boolean,
@@ -721,6 +725,12 @@ export const ServerConfig = Schema.Struct({
    * stays absent for subscribers that did not opt in.
    */
   usageLimitSources: Schema.optional(UsageLimitSourceSnapshots),
+  /**
+   * Server checks of the configured user MCP servers. Present in the snapshot
+   * only for subscribers that opted in; absent means unknown, an empty array
+   * means nothing is checked.
+   */
+  mcpServerChecks: Schema.optional(McpServerChecks),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
@@ -852,6 +862,19 @@ export const ServerConfigStreamUsageLimitSourcesUpdatedEvent = Schema.Struct({
 export type ServerConfigStreamUsageLimitSourcesUpdatedEvent =
   typeof ServerConfigStreamUsageLimitSourcesUpdatedEvent.Type;
 
+export const ServerConfigMcpServerChecksUpdatedPayload = Schema.Struct({
+  /** The full current set, replacing the previous one. */
+  checks: McpServerChecks,
+});
+
+export const ServerConfigStreamMcpServerChecksUpdatedEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("mcpServerChecksUpdated"),
+  payload: ServerConfigMcpServerChecksUpdatedPayload,
+});
+export type ServerConfigStreamMcpServerChecksUpdatedEvent =
+  typeof ServerConfigStreamMcpServerChecksUpdatedEvent.Type;
+
 export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamSnapshotEvent,
   ServerConfigStreamKeybindingsUpdatedEvent,
@@ -859,6 +882,7 @@ export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamSettingsUpdatedEvent,
   ServerConfigStreamEnvironmentThemesUpdatedEvent,
   ServerConfigStreamUsageLimitSourcesUpdatedEvent,
+  ServerConfigStreamMcpServerChecksUpdatedEvent,
 ]);
 export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
 

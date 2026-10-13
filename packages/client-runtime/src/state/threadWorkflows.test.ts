@@ -6,6 +6,7 @@ import {
   canForkProjectedAssistantItem,
   deriveThreadQueueWorkflowState,
   resolveLatestMergeBackRun,
+  selectThreadMcpSessionServers,
   threadSupportsProviderHandoff,
 } from "./threadWorkflows.ts";
 
@@ -421,4 +422,31 @@ describe("thread workflows", () => {
       expect(resolveLatestMergeBackRun(projection)).toBeNull();
     },
   );
+});
+
+describe("selectThreadMcpSessionServers", () => {
+  const projection = (mcpServers: unknown) =>
+    ({
+      thread: { id: "thread", activeProviderThreadId: "provider-thread" },
+      runs: [],
+      providerThreads: [
+        { id: "provider-thread", appThreadId: "thread", providerSessionId: "session" },
+      ],
+      providerSessions: [{ id: "session", status: "ready", mcpServers }],
+    }) as unknown as OrchestrationV2ThreadProjection;
+
+  it("returns the servers the thread's provider session reported", () => {
+    const servers = [{ name: "docs", status: "connected", toolCount: 3 }];
+    expect(selectThreadMcpSessionServers(projection(servers))).toEqual(servers);
+  });
+
+  it("returns null when the provider reported nothing or there is no session", () => {
+    expect(selectThreadMcpSessionServers(projection(undefined))).toBeNull();
+    expect(
+      selectThreadMcpSessionServers({
+        ...projection(undefined),
+        providerSessions: [],
+      }),
+    ).toBeNull();
+  });
 });

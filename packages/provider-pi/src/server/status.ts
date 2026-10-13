@@ -223,6 +223,19 @@ const runPiVersionCommand = (piSettings: PiSettings, environment: NodeJS.Process
     );
   });
 
+/** The installed Pi's version, or null when it cannot be read in time. */
+export const detectPiVersion = (piSettings: PiSettings, environment: NodeJS.ProcessEnv) =>
+  runPiVersionCommand(piSettings, environment).pipe(
+    Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
+    Effect.map((output) =>
+      Option.isSome(output) && output.value.code === 0
+        ? parseGenericCliVersion(`${output.value.stdout}
+${output.value.stderr}`)
+        : null,
+    ),
+    Effect.orElseSucceed(() => null),
+  );
+
 export function buildInitialPiProviderSnapshot(
   piSettings: PiSettings,
 ): Effect.Effect<ServerProviderDraft> {

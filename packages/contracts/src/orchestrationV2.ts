@@ -37,6 +37,7 @@ import {
   TurnItemId,
 } from "./baseSchemas.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
+import { McpSessionStatusList } from "./mcpSessionStatus.ts";
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
@@ -233,12 +234,19 @@ export const OrchestrationV2StreamingCapabilities = Schema.Struct({
 });
 export type OrchestrationV2StreamingCapabilities = typeof OrchestrationV2StreamingCapabilities.Type;
 
+/** Transports a provider can carry for user MCP servers (`settings.mcpServers`). */
+export const OrchestrationV2UserMcpTransport = Schema.Literals(["stdio", "http"]);
+export type OrchestrationV2UserMcpTransport = typeof OrchestrationV2UserMcpTransport.Type;
+
 export const OrchestrationV2ToolCapabilities = Schema.Struct({
   exposesToolItemIds: Schema.Boolean,
   emitsToolStarted: Schema.Boolean,
   emitsToolCompleted: Schema.Boolean,
   emitsToolOutput: Schema.Boolean,
+  /** Whether the provider carries the built-in `t3-code` server. */
   supportsMcpTools: Schema.Boolean,
+  /** User MCP server transports the adapter passes through; adapters skip any not listed. */
+  userMcpTransports: Schema.Array(OrchestrationV2UserMcpTransport),
   supportsDynamicToolCallbacks: Schema.Boolean,
 });
 export type OrchestrationV2ToolCapabilities = typeof OrchestrationV2ToolCapabilities.Type;
@@ -738,6 +746,12 @@ export const OrchestrationV2ProviderSession = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   lastError: Schema.NullOr(Schema.String),
+  /**
+   * The session's MCP servers and their reported status. Each update replaces
+   * the list. Absent when the provider reports nothing, which clients show as
+   * `unknown`.
+   */
+  mcpServers: Schema.optional(McpSessionStatusList),
 });
 export type OrchestrationV2ProviderSession = typeof OrchestrationV2ProviderSession.Type;
 

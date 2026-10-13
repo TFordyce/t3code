@@ -1,4 +1,5 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useMemo } from "react";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import { ScreenHeaderButton } from "../../components/ScreenHeaderButton";
@@ -20,7 +21,7 @@ export function ThreadHeader(
 ) {
   const navigation = useNavigation();
   const { layout, panes, toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
-  const { onOpenTerminal, onMergeBack } = props.gitControls;
+  const { onOpenTerminal, onMergeBack, environmentId, threadId } = props.gitControls;
   const native = useThreadHeaderOptions(props);
   const androidHeaderActions = useMemo<ReadonlyArray<ScreenHeaderAction>>(() => {
     const actions: ScreenHeaderAction[] = [];
@@ -48,6 +49,15 @@ export function ThreadHeader(
       });
     }
     actions.push({
+      accessibilityLabel: "MCP servers",
+      icon: "server.rack",
+      onPress: () =>
+        navigation.navigate("ThreadMcp", {
+          environmentId: EnvironmentId.make(String(environmentId)),
+          threadId: ThreadId.make(String(threadId)),
+        }),
+    });
+    actions.push({
       accessibilityLabel: "Open git controls",
       icon: "point.topleft.down.curvedto.point.bottomright.up",
       onPress: props.onOpenGitInspector,
@@ -66,6 +76,9 @@ export function ThreadHeader(
     props.onOpenFilesInspector,
     onOpenTerminal,
     onMergeBack,
+    environmentId,
+    threadId,
+    navigation,
     props.onOpenGitInspector,
     toggleAuxiliaryPane,
     props.onReturnToThread,

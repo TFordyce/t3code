@@ -43,7 +43,7 @@ import {
 
 const ANTIGRAVITY_PROVIDER = ProviderDriverKind.make("antigravity");
 
-const AntigravityProviderCapabilitiesV2 = {
+export const AntigravityProviderCapabilitiesV2 = {
   ...AcpProviderCapabilitiesV2,
   sessions: {
     ...AcpProviderCapabilitiesV2.sessions,
@@ -53,6 +53,7 @@ const AntigravityProviderCapabilitiesV2 = {
   tools: {
     ...AcpProviderCapabilitiesV2.tools,
     supportsMcpTools: true,
+    userMcpTransports: [],
   },
   subagents: {
     ...AcpProviderCapabilitiesV2.subagents,
