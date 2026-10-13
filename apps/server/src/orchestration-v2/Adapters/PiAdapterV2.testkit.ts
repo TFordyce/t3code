@@ -370,11 +370,30 @@ class PiReplayController {
 /** Deliberately outside the valid pid range so PiRpc's group kill never lands. */
 const REPLAY_PID = 999_999_999;
 
+/** The adapter's `pi --version` probe is not part of any recorded transcript. */
+const isVersionProbe = (command: ChildProcess.Command) =>
+  ChildProcess.isStandardCommand(command) && command.args.includes("--version");
+
+const versionProbeHandle = ChildProcessSpawner.makeHandle({
+  pid: ChildProcessSpawner.ProcessId(REPLAY_PID),
+  exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+  isRunning: Effect.succeed(false),
+  kill: () => Effect.void,
+  unref: Effect.succeed(Effect.void),
+  stdin: Sink.drain,
+  stdout: Stream.empty,
+  stderr: Stream.empty,
+  all: Stream.empty,
+  getInputFd: () => Sink.drain,
+  getOutputFd: () => Stream.empty,
+});
+
 function makePiReplaySpawner(
   controller: PiReplayController,
 ): ChildProcessSpawner.ChildProcessSpawner["Service"] {
   return ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
+      if (isVersionProbe(command)) return versionProbeHandle;
       const process = controller.spawn(command, yield* Queue.unbounded<Uint8Array, Cause.Done>());
       yield* Effect.addFinalizer(() => Effect.sync(() => controller.close(process)));
       const split = makeLineSplitter();
