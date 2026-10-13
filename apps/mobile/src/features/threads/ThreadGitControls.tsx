@@ -249,6 +249,13 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     });
   }, [environmentId, navigation, threadId]);
 
+  const openMcpServers = useCallback(() => {
+    navigation.navigate("ThreadMcp", {
+      environmentId: EnvironmentId.make(String(environmentId)),
+      threadId: ThreadId.make(String(threadId)),
+    });
+  }, [environmentId, navigation, threadId]);
+
   const openGitInspector = useCallback(() => {
     if (props.onOpenGitInspector) {
       props.onOpenGitInspector();
@@ -265,6 +272,7 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     isRepo,
     openFiles,
     openGitInspector,
+    openMcpServers,
     openReview,
     quickAction,
     quickActionHint,
@@ -393,6 +401,13 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
                 ]
               : []),
             {
+              description: "Which MCP servers this thread's session has",
+              icon: { name: "server.rack", type: "sfSymbol" },
+              label: "MCP servers",
+              onPress: model.openMcpServers,
+              type: "action",
+            },
+            {
               description: "Commit, files, branches",
               icon: { name: "ellipsis", type: "sfSymbol" },
               label: "More",
@@ -412,6 +427,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       model.isRepo,
       model.openFiles,
       model.openGitInspector,
+      model.openMcpServers,
       model.openReview,
       model.quickAction.disabled,
       model.quickAction.label,

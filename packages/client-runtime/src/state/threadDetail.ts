@@ -5,6 +5,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import {
   deriveThreadQueueWorkflowState,
   getUserQueuedThreadRuns,
+  selectThreadMcpSessionServers,
   type ThreadQueueWorkflowState,
 } from "./threadWorkflows.ts";
 import { deriveThreadTurnSubagents, type ThreadTurnSubagents } from "./threadSubagents.ts";
@@ -123,6 +124,12 @@ export function createEnvironmentThreadDetailAtoms<E>(
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-turn-subagents:${key}`));
   });
 
+  const mcpSessionServersAtomFamily = Atom.family((key: string) =>
+    Atom.make((get) =>
+      selectThreadMcpSessionServers(Option.getOrNull(get(threadStateValueAtomFamily(key)).data)),
+    ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-mcp-session-servers:${key}`)),
+  );
+
   const worktreePathAtomFamily = Atom.family((key: string) =>
     Atom.make(
       (get) =>
@@ -189,6 +196,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
     queueWorkflowAtom: (ref: ScopedThreadRef) => queueWorkflowAtomFamily(threadKey(ref)),
     queuedCountAtom: (ref: ScopedThreadRef) => queuedCountAtomFamily(threadKey(ref)),
     turnSubagentsAtom: (ref: ScopedThreadRef) => turnSubagentsAtomFamily(threadKey(ref)),
+    mcpSessionServersAtom: (ref: ScopedThreadRef) => mcpSessionServersAtomFamily(threadKey(ref)),
     stateAtom: (ref: ScopedThreadRef) => threadStateValueAtomFamily(threadKey(ref)),
     threadAtom: (ref: ScopedThreadRef) => threadAtomFamily(threadKey(ref)),
     visibleTurnItemsAtom: (ref: ScopedThreadRef) => visibleTurnItemsAtomFamily(threadKey(ref)),
