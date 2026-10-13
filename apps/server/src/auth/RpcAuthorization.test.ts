@@ -472,6 +472,45 @@ it.effect("denies manual cleanup before the handler without settings permission"
   }).pipe(Effect.scoped),
 );
 
+it.effect.each([
+  { method: WS_METHODS.serverStartMcpServerSignIn, payload: { scope: "global", name: "docs" } },
+  {
+    method: WS_METHODS.serverCompleteMcpServerSignIn,
+    payload: { scope: "global", name: "docs", callbackUrl: "http://127.0.0.1:1/callback?code=a" },
+  },
+  { method: WS_METHODS.serverSignOutMcpServer, payload: { scope: "global", name: "docs" } },
+] as const)("denies MCP sign-in RPC $method without providers-manage", ({ method, payload }) =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof method> => tag !== method,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(method, () =>
+            Effect.sync(() => {
+              handled = true;
+              return {} as never;
+            }),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope, AuthSettingsWriteScope]),
+        ),
+      ),
+    );
+    expect(
+      yield* (
+        client[method] as (
+          input: typeof payload,
+        ) => Effect.Effect<void, { readonly requiredPermission: string }>
+      )(payload).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthProvidersManageScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
 it.effect("denies an MCP server re-check before the handler without providers-manage", () =>
   Effect.gen(function* () {
     const group = WsRpcGroup.omit(

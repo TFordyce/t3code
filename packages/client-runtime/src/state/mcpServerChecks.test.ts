@@ -1,9 +1,18 @@
-import type { McpServerCheck, ServerConfig, ServerConfigStreamEvent } from "@t3tools/contracts";
+import type {
+  McpServerCheck,
+  McpServerConfig,
+  ServerConfig,
+  ServerConfigStreamEvent,
+} from "@t3tools/contracts";
 import { Option } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import { applyServerConfigProjection } from "./serverConfigProjection.ts";
-import { describeMcpServerCheck, selectMcpServerCheck } from "./mcpServerChecks.ts";
+import {
+  describeMcpServerCheck,
+  mcpSignInControl,
+  selectMcpServerCheck,
+} from "./mcpServerChecks.ts";
 
 const check = (overrides: Partial<McpServerCheck> = {}): McpServerCheck => ({
   scope: "global",
@@ -61,5 +70,49 @@ describe("server config projection", () => {
     expect(Option.getOrThrow(updated).config.mcpServerChecks?.map((c) => c.name)).toEqual([
       "other",
     ]);
+  });
+});
+
+describe("mcpSignInControl", () => {
+  const http = (headers: ReadonlyArray<{ name: string }> = []) =>
+    ({
+      transport: "http",
+      url: "https://mcp.example.com/mcp",
+      headers: headers.map((row) => ({ ...row, value: "", sensitive: true })),
+    }) as McpServerConfig;
+
+  it("offers sign-in once the server has asked for it, and sign-in again when expired", () => {
+    expect(mcpSignInControl(http(), check({ status: "connected" }))).toEqual({ kind: "none" });
+    expect(mcpSignInControl(http(), undefined)).toEqual({ kind: "none" });
+    expect(mcpSignInControl(http(), check({ status: "needs-auth" }))).toEqual({
+      kind: "sign-in",
+      label: "Sign in",
+    });
+    expect(mcpSignInControl(http(), check({ status: "needs-auth", auth: "expired" }))).toEqual({
+      kind: "sign-in",
+      label: "Sign in again",
+    });
+    expect(mcpSignInControl(http(), check({ auth: "signed-in" }))).toEqual({ kind: "signed-in" });
+  });
+
+  it("is blocked by the entry's own Authorization header", () => {
+    expect(
+      mcpSignInControl(http([{ name: "authorization" }]), check({ status: "needs-auth" })),
+    ).toEqual({ kind: "blocked", message: "Remove the Authorization header to sign in." });
+  });
+
+  it("is never offered for a command server", () => {
+    expect(
+      mcpSignInControl(
+        { transport: "stdio", command: "x", args: [], env: [] },
+        check({ status: "needs-auth" }),
+      ),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("words an expired sign-in", () => {
+    expect(describeMcpServerCheck(check({ status: "needs-auth", auth: "expired" }))).toBe(
+      "Sign-in expired",
+    );
   });
 });

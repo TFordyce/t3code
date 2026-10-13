@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import { AuthProvidersManageScope } from "./auth.ts";
 import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
+import { McpServerCheck, McpServerConfig } from "./mcpServers.ts";
 import { WS_METHODS } from "./rpc.ts";
 import {
   requiredScopesForServerSettingsPatch,
@@ -137,6 +138,36 @@ describe("server checks", () => {
     expect(clientRpcRequiredScopes(WS_METHODS.serverCheckMcpServers, {})).toEqual([
       AuthProvidersManageScope,
     ]);
+  });
+});
+
+describe("sign-in", () => {
+  it("guards start, complete and sign-out with providers-manage", () => {
+    for (const method of [
+      WS_METHODS.serverStartMcpServerSignIn,
+      WS_METHODS.serverCompleteMcpServerSignIn,
+      WS_METHODS.serverSignOutMcpServer,
+    ]) {
+      expect(clientRpcRequiredScopes(method, {})).toEqual([AuthProvidersManageScope]);
+    }
+  });
+
+  it("decodes an http server with an OAuth client and a check with an auth state", () => {
+    const server = Schema.decodeUnknownSync(McpServerConfig)({
+      transport: "http",
+      url: "https://mcp.example.com/mcp",
+      oauth: { clientId: "abc", clientSecret: { value: "", valueRedacted: true } },
+    });
+    expect(server).toMatchObject({ oauth: { clientId: "abc" } });
+    expect(
+      Schema.decodeUnknownSync(McpServerCheck)({
+        scope: "global",
+        name: "docs",
+        status: "needs-auth",
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        auth: "expired",
+      }).auth,
+    ).toBe("expired");
   });
 });
 

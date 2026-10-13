@@ -34,6 +34,11 @@ export interface McpServerDraft {
   readonly env: ReadonlyArray<McpEnvDraftRow>;
   readonly url: string;
   readonly headers: ReadonlyArray<McpEnvDraftRow>;
+  /** Optional OAuth client for sign-in; blank means register one dynamically. */
+  readonly oauthClientId: string;
+  readonly oauthClientSecret: string;
+  /** The secret is stored on the host and not shown. */
+  readonly oauthClientSecretRedacted: boolean;
   readonly enabled: boolean;
 }
 
@@ -45,6 +50,9 @@ export const emptyDraft = (): McpServerDraft => ({
   env: [],
   url: "",
   headers: [],
+  oauthClientId: "",
+  oauthClientSecret: "",
+  oauthClientSecretRedacted: false,
   enabled: true,
 });
 
@@ -66,7 +74,15 @@ const draftRows = (
 export function draftFromConfig(name: string, config: McpServerConfig): McpServerDraft {
   const base = { ...emptyDraft(), name, enabled: config.enabled !== false };
   return config.transport === "http"
-    ? { ...base, transport: "http", url: config.url, headers: draftRows(config.headers) }
+    ? {
+        ...base,
+        transport: "http",
+        url: config.url,
+        headers: draftRows(config.headers),
+        oauthClientId: config.oauth?.clientId ?? "",
+        oauthClientSecret: config.oauth?.clientSecret?.value ?? "",
+        oauthClientSecretRedacted: config.oauth?.clientSecret?.valueRedacted === true,
+      }
     : {
         ...base,
         command: config.command,
@@ -92,10 +108,20 @@ const rowsFromDraft = (rows: ReadonlyArray<McpEnvDraftRow>) =>
 export function configFromDraft(draft: McpServerDraft): McpServerConfig {
   const enabled = draft.enabled ? {} : { enabled: false };
   if (draft.transport === "http") {
+    const clientId = draft.oauthClientId.trim();
+    // A redacted secret goes back redacted and empty: the server keeps what it has.
+    const clientSecret = draft.oauthClientSecretRedacted
+      ? { value: "", valueRedacted: true }
+      : draft.oauthClientSecret.length > 0
+        ? { value: draft.oauthClientSecret }
+        : undefined;
     return {
       transport: "http",
       url: draft.url.trim(),
       headers: rowsFromDraft(draft.headers),
+      ...(clientId.length === 0
+        ? {}
+        : { oauth: { clientId, ...(clientSecret === undefined ? {} : { clientSecret }) } }),
       ...enabled,
     };
   }
@@ -117,6 +143,7 @@ export interface McpDraftErrors {
   readonly env?: string;
   readonly url?: string;
   readonly headers?: string;
+  readonly oauthClientId?: string;
 }
 
 const isHttpUrl = (value: string) => {
@@ -153,6 +180,9 @@ export function validateDraft(
       errors.headers = `"${invalid}" is not a valid header name.`;
     } else if (new Set(names.map((rowName) => rowName.toLowerCase())).size !== names.length) {
       errors.headers = "Each header can be set once.";
+    }
+    if (draft.oauthClientId.trim().length === 0 && draft.oauthClientSecret.length > 0) {
+      errors.oauthClientId = "Enter the client ID that goes with this secret.";
     }
     return errors;
   }
@@ -316,7 +346,13 @@ export function overrideDraftFromEnvironment(
   const draft = draftFromConfig(name, { ...config, enabled: true });
   const cleared = (rows: ReadonlyArray<McpEnvDraftRow>) =>
     rows.map((row) => (row.redacted ? { ...row, value: "", redacted: false } : row));
-  return { ...draft, env: cleared(draft.env), headers: cleared(draft.headers) };
+  return {
+    ...draft,
+    env: cleared(draft.env),
+    headers: cleared(draft.headers),
+    oauthClientSecret: "",
+    oauthClientSecretRedacted: false,
+  };
 }
 
 /**

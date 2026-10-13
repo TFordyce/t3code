@@ -36,6 +36,7 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as McpSignIn from "./McpSignIn.ts";
 import * as McpUpstream from "./McpUpstream.ts";
 
 const GLOBAL_SCOPE = "global";
@@ -115,6 +116,7 @@ const make = (timeout: Duration.Duration) =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
     const upstream = yield* McpUpstream.McpUpstream;
+    const signIn = yield* McpSignIn.McpSignIn;
     const state = yield* SubscriptionRef.make<Checks>([]);
     const generations = new Map<string, number>();
     const everChecked = yield* Ref.make(false);
@@ -269,11 +271,38 @@ const make = (timeout: Duration.Duration) =>
         return;
       }
       const checkedAt = new Date().toISOString();
-      yield* replace(scope, name, { scope, name, status: "checking", checkedAt });
+      const previousAuth = (yield* SubscriptionRef.get(state)).find(
+        (row) => row.scope === scope && row.name === name,
+      )?.auth;
+      yield* replace(scope, name, {
+        scope,
+        name,
+        status: "checking",
+        checkedAt,
+        ...(previousAuth === undefined ? {} : { auth: previousAuth }),
+      });
       const outcome = yield* probe(scope, name, config);
       // An edit or removal that landed meanwhile owns the row now.
       if (generations.get(key) !== generation) return;
-      yield* replace(scope, name, { scope, name, checkedAt, ...outcome });
+      // `auth` stays absent until the server has shown OAuth: a sign-in exists,
+      // an OAuth client is configured, the server asked for one, or it was shown before.
+      const stored =
+        config.transport === "http" ? yield* signIn.authState({ scope, name }) : undefined;
+      const auth =
+        stored ??
+        (config.transport === "http" &&
+        (config.oauth !== undefined ||
+          outcome.status === "needs-auth" ||
+          previousAuth !== undefined)
+          ? ("signed-out" as const)
+          : undefined);
+      yield* replace(scope, name, {
+        scope,
+        name,
+        checkedAt,
+        ...outcome,
+        ...(auth === undefined ? {} : { auth }),
+      });
     });
 
     const check: McpServerChecks["Service"]["check"] = Effect.fn("McpServerChecks.check")(
@@ -316,6 +345,12 @@ const make = (timeout: Duration.Duration) =>
           });
         return Effect.forEach(changed, checkOne, { concurrency: "unbounded", discard: true });
       }),
+      Effect.forkScoped({ startImmediately: true }),
+    );
+
+    // A sign-in, sign-out or failed refresh shows up as a fresh check of that entry.
+    yield* signIn.changes.pipe(
+      Stream.runForEach((target) => checkOne(target)),
       Effect.forkScoped({ startImmediately: true }),
     );
 

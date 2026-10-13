@@ -181,44 +181,23 @@ const gitHubKind: SecretKind = {
 
 type McpServerEntries = Readonly<Record<string, McpServerConfig | McpServerDisabledMarker>>;
 
+/** Where an MCP entry lives, as part of its store keys: `"global"` or `project:<id>`. */
+const mcpScopeKey = (projectId: string | null) =>
+  projectId === null ? "global" : `project:${projectId}`;
+
 /**
- * Visits the rows of every MCP entry, environment-wide first and then each
- * project's overrides, and rebuilds the entries from the answers. The scope
- * is part of the store key, so a project override never shares a secret with
- * the environment entry of the same name.
+ * Rebuilds every MCP entry, environment-wide first and then each project's
+ * overrides. The scope is part of the store key, so a project override never
+ * shares a secret with the environment entry of the same name.
  */
-const mapMcpServerRows = (
+const mapMcpEntries = (
   settings: ServerSettings,
-  kind: "env" | "header",
-  visit: (entry: SecretEntry) => SecretValue | undefined,
+  mapServer: (scope: string, name: string, server: McpServerConfig) => McpServerConfig,
 ): ServerSettings => {
   const mapEntries = <Entries extends McpServerEntries>(scope: string, entries: Entries) => {
     const mapped: Record<string, McpServerConfig | McpServerDisabledMarker> = {};
     for (const [name, server] of Object.entries(entries)) {
-      const wanted = kind === "header" ? "http" : "stdio";
-      if (isMcpServerDisabledMarker(server) || server.transport !== wanted) {
-        mapped[name] = server;
-        continue;
-      }
-      const rows: ReadonlyArray<ProviderInstanceEnvironmentVariable | McpServerHeader> =
-        server.transport === "http" ? server.headers : server.env;
-      const next: Array<ProviderInstanceEnvironmentVariable | McpServerHeader> = [];
-      for (const row of rows) {
-        const entry: SecretEntry = {
-          key: `mcp-${kind}-${encodeSecretName(scope)}-${encodeSecretName(name)}-${encodeSecretName(row.name)}`,
-          sensitive: row.sensitive,
-          redacted: row.valueRedacted === true,
-          value: row.value,
-          context: { environmentVariable: row.name },
-        };
-        const answer = visit(entry);
-        if (answer === undefined) continue;
-        next.push(applySecretValue(row, entry, answer));
-      }
-      mapped[name] =
-        server.transport === "http"
-          ? { ...server, headers: next as McpServerHeader[] }
-          : { ...server, env: next as ProviderInstanceEnvironmentVariable[] };
+      mapped[name] = isMcpServerDisabledMarker(server) ? server : mapServer(scope, name, server);
     }
     return mapped as Entries;
   };
@@ -228,14 +207,79 @@ const mapMcpServerRows = (
     projectSettingsOverrides[projectId] =
       overrides.mcpServers === undefined
         ? overrides
-        : { ...overrides, mcpServers: mapEntries(`project:${projectId}`, overrides.mcpServers) };
+        : { ...overrides, mcpServers: mapEntries(mcpScopeKey(projectId), overrides.mcpServers) };
   }
   return {
     ...settings,
-    mcpServers: mapEntries("global", settings.mcpServers),
+    mcpServers: mapEntries(mcpScopeKey(null), settings.mcpServers),
     projectSettingsOverrides:
       projectSettingsOverrides as ServerSettings["projectSettingsOverrides"],
   };
+};
+
+/** Visits the env rows (stdio) or header rows (http) of every MCP entry. */
+const mapMcpServerRows = (
+  settings: ServerSettings,
+  kind: "env" | "header",
+  visit: (entry: SecretEntry) => SecretValue | undefined,
+): ServerSettings =>
+  mapMcpEntries(settings, (scope, name, server) => {
+    if (server.transport !== (kind === "header" ? "http" : "stdio")) return server;
+    const rows: ReadonlyArray<ProviderInstanceEnvironmentVariable | McpServerHeader> =
+      server.transport === "http" ? server.headers : server.env;
+    const next: Array<ProviderInstanceEnvironmentVariable | McpServerHeader> = [];
+    for (const row of rows) {
+      const entry: SecretEntry = {
+        key: `mcp-${kind}-${encodeSecretName(scope)}-${encodeSecretName(name)}-${encodeSecretName(row.name)}`,
+        sensitive: row.sensitive,
+        redacted: row.valueRedacted === true,
+        value: row.value,
+        context: { environmentVariable: row.name },
+      };
+      const answer = visit(entry);
+      if (answer === undefined) continue;
+      next.push(applySecretValue(row, entry, answer));
+    }
+    return server.transport === "http"
+      ? { ...server, headers: next as McpServerHeader[] }
+      : { ...server, env: next as ProviderInstanceEnvironmentVariable[] };
+  });
+
+/** Where an entry's sign-in bundle lives. `scope` is `"global"` or `project:<id>`. */
+export const mcpSignInSecretKey = (scope: string, name: string) =>
+  `mcp-signin-${encodeSecretName(scope)}-${encodeSecretName(name)}`;
+
+/** The OAuth client secret of user HTTP MCP servers, keyed by scope and server. */
+const mcpOAuthClientSecretKind: SecretKind = {
+  map: (settings, visit) =>
+    mapMcpEntries(settings, (scope, name, server) => {
+      const clientSecret = server.transport === "http" ? server.oauth?.clientSecret : undefined;
+      if (server.transport !== "http" || server.oauth === undefined || clientSecret === undefined) {
+        return server;
+      }
+      const entry: SecretEntry = {
+        key: `mcp-oauth-client-secret-${encodeSecretName(scope)}-${encodeSecretName(name)}`,
+        sensitive: true,
+        redacted: clientSecret.valueRedacted === true,
+        value: clientSecret.value,
+        context: { environmentVariable: "oauth.clientSecret" },
+      };
+      const answer = visit(entry);
+      const { clientSecret: _drop, ...oauth } = server.oauth;
+      return {
+        ...server,
+        oauth:
+          answer === undefined
+            ? oauth
+            : {
+                ...oauth,
+                clientSecret: {
+                  value: answer.value,
+                  ...(answer.redacted ? { valueRedacted: true } : {}),
+                },
+              },
+      };
+    }),
 };
 
 /** Sensitive header values of user HTTP MCP servers, keyed by scope, server and header. */
@@ -254,6 +298,7 @@ export const SETTINGS_SECRET_KINDS: ReadonlyArray<SecretKind> = [
   usageLimitSourceKind,
   mcpServerEnvironmentKind,
   mcpServerHeaderKind,
+  mcpOAuthClientSecretKind,
   bitbucketKind,
   gitHubKind,
 ];
@@ -297,6 +342,40 @@ export type SecretChange = {
 );
 
 const textEncoder = new TextEncoder();
+
+type McpHttpEntries = ReadonlyMap<string, Extract<McpServerConfig, { transport: "http" }>>;
+
+/** Every full HTTP entry, by sign-in store key. */
+const httpEntriesBySignInKey = (settings: ServerSettings): McpHttpEntries => {
+  const entries = new Map<string, Extract<McpServerConfig, { transport: "http" }>>();
+  mapMcpEntries(settings, (scope, name, server) => {
+    if (server.transport === "http") entries.set(mcpSignInSecretKey(scope, name), server);
+    return server;
+  });
+  return entries;
+};
+
+/**
+ * Removals of the sign-ins an edit invalidates. A sign-in belongs to the
+ * server it was granted for, so it goes when its entry is removed, its URL
+ * changes, its transport leaves http, or its OAuth client id changes.
+ * Toggling `enabled`, project markers and other header edits keep it.
+ */
+const planMcpSignInClears = (current: ServerSettings, next: ServerSettings): SecretChange[] => {
+  const after = httpEntriesBySignInKey(next);
+  const changes: SecretChange[] = [];
+  for (const [key, before] of httpEntriesBySignInKey(current)) {
+    const kept = after.get(key);
+    if (
+      kept === undefined ||
+      kept.url !== before.url ||
+      kept.oauth?.clientId !== before.oauth?.clientId
+    ) {
+      changes.push({ kind: "remove", secretName: key, operation: "remove-secret" });
+    }
+  }
+  return changes;
+};
 
 /**
  * Plans the store writes and removals that turn `next` into its on-disk form,
@@ -354,6 +433,8 @@ export function planSettingsSecretPersist(
       }),
     next,
   );
+
+  changes.push(...planMcpSignInClears(current, next));
 
   for (const entry of currentEntries) {
     if (!entry.sensitive || nextKeys.has(entry.key)) continue;

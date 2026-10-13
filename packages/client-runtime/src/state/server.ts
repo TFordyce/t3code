@@ -1004,6 +1004,18 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverCheckMcpServers,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    startMcpServerSignIn: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:start-mcp-server-sign-in",
+      tag: WS_METHODS.serverStartMcpServerSignIn,
+    }),
+    completeMcpServerSignIn: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:complete-mcp-server-sign-in",
+      tag: WS_METHODS.serverCompleteMcpServerSignIn,
+    }),
+    signOutMcpServer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:sign-out-mcp-server",
+      tag: WS_METHODS.serverSignOutMcpServer,
+    }),
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",
       tag: WS_METHODS.serverRunStorageCleanup,

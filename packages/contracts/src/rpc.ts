@@ -3,7 +3,13 @@ import {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
 } from "./orchestrationV2.ts";
-import { CheckMcpServersInput } from "./mcpServers.ts";
+import {
+  CheckMcpServersInput,
+  CompleteMcpServerSignInInput,
+  McpServerCheckTarget,
+  McpServerSignInError,
+  McpServerSignInStarted,
+} from "./mcpServers.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
   McpAppCallToolInput,
@@ -477,6 +483,9 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
   serverCheckMcpServers: "server.checkMcpServers",
+  serverStartMcpServerSignIn: "server.startMcpServerSignIn",
+  serverCompleteMcpServerSignIn: "server.completeMcpServerSignIn",
+  serverSignOutMcpServer: "server.signOutMcpServer",
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
@@ -748,6 +757,21 @@ const WsServerRunStorageCleanupRpc = Rpc.make(WS_METHODS.serverRunStorageCleanup
 });
 const WsServerCheckMcpServersRpc = Rpc.make(WS_METHODS.serverCheckMcpServers, {
   payload: CheckMcpServersInput,
+  success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
+});
+const WsServerStartMcpServerSignInRpc = Rpc.make(WS_METHODS.serverStartMcpServerSignIn, {
+  payload: McpServerCheckTarget,
+  success: McpServerSignInStarted,
+  error: Schema.Union([McpServerSignInError, EnvironmentAuthorizationError]),
+});
+const WsServerCompleteMcpServerSignInRpc = Rpc.make(WS_METHODS.serverCompleteMcpServerSignIn, {
+  payload: CompleteMcpServerSignInInput,
+  success: Schema.Struct({}),
+  error: Schema.Union([McpServerSignInError, EnvironmentAuthorizationError]),
+});
+const WsServerSignOutMcpServerRpc = Rpc.make(WS_METHODS.serverSignOutMcpServer, {
+  payload: McpServerCheckTarget,
   success: Schema.Struct({}),
   error: EnvironmentAuthorizationError,
 });
@@ -1874,6 +1898,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,
   WsServerCheckMcpServersRpc,
+  WsServerStartMcpServerSignInRpc,
+  WsServerCompleteMcpServerSignInRpc,
+  WsServerSignOutMcpServerRpc,
   WsServerGetStorageCleanupReportRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,

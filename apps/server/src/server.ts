@@ -60,6 +60,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpProxy from "./mcp/McpProxy.ts";
 import * as McpServerChecks from "./mcp/McpServerChecks.ts";
+import * as McpSignIn from "./mcp/McpSignIn.ts";
 import * as McpUpstream from "./mcp/McpUpstream.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -627,8 +628,11 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
       ResetCreditCoordinator.layer,
       ProviderLatestVersions.layer,
       McpProviderSessions.layer,
-      McpUpstream.layer,
-      McpServerChecks.layer.pipe(Layer.provide(McpUpstream.layer)),
+      // One McpSignIn and McpUpstream are shared by checks, the proxy and the RPCs.
+      McpServerChecks.layer.pipe(
+        Layer.provideMerge(McpUpstream.layer),
+        Layer.provideMerge(McpSignIn.layer),
+      ),
     ),
   ),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
