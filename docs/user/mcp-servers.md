@@ -21,7 +21,9 @@ secrets and sign-in stay attached to it.
 
 Mark an environment variable or header as sensitive to store its value on the environment's
 host. A saved secret shows as **Stored securely**, and T3 Code never shows the value again.
-When you edit the server, leave that field alone to keep the value.
+When you edit the server, leave that field alone to keep the value. A header or a token in
+the URL's query string is saved in plain settings unless you mark it sensitive, and a URL is
+never stored securely, so send credentials as sensitive headers.
 
 Each server shows a check result, such as **Connected · 41 tools**, **Needs sign-in**, or
 **Failed** with the error. T3 Code checks a server when you save it. Use **Re-check** to

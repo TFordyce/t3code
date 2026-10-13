@@ -35,6 +35,7 @@ import {
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
@@ -52,6 +53,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
+import { patchChangesProjectMcpServers } from "@t3tools/shared/mcpServers";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { resolveSymlinkTarget } from "@t3tools/shared/symlink";
 import * as ServerConfig from "./config.ts";
@@ -222,6 +224,38 @@ export class ServerSettingsService extends Context.Service<
   /** @deprecated Import and use `layerTest` from this module. */
   static readonly layerTest = (overrides: DeepPartial<ServerSettings> = {}) => layerTest(overrides);
 }
+
+/** A client patch changes project MCP servers without the providers-manage grant. */
+export class ProvidersManageRequiredError extends Data.TaggedError(
+  "ProvidersManageRequiredError",
+)<{}> {}
+
+/**
+ * Applies a client's settings update and returns the client view. Clients
+ * resend a project's whole override entry, so only a real change to its MCP
+ * servers needs providers-manage; the static scope check cannot see the stored
+ * value, so the caller passes whether the session holds that grant.
+ */
+export const updateSettingsForClient = Effect.fn("ServerSettings.updateSettingsForClient")(
+  function* (input: {
+    readonly patch: ServerSettingsPatch;
+    readonly providerInstanceMutation?: ProviderInstanceMutation | undefined;
+    readonly canManageProviders: boolean;
+  }) {
+    const settingsService = yield* ServerSettingsService;
+    const { patch, providerInstanceMutation } = input;
+    if (!input.canManageProviders && patch.projectSettingsOverrides !== undefined) {
+      const stored = redactServerSettingsForClient(yield* settingsService.getSettings);
+      if (patchChangesProjectMcpServers(stored, patch)) {
+        return yield* new ProvidersManageRequiredError();
+      }
+    }
+    const settings = yield* providerInstanceMutation === undefined
+      ? settingsService.updateSettings(patch)
+      : settingsService.updateProviderInstance(providerInstanceMutation, patch);
+    return redactServerSettingsForClient(settings);
+  },
+);
 
 const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
   Effect.gen(function* () {

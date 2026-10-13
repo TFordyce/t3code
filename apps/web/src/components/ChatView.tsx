@@ -11121,6 +11121,7 @@ export default function ChatView(props: ChatViewProps) {
       <ThreadMcpPanel
         environmentId={activeThreadRef.environmentId}
         sessionServers={threadMcpSessionServers}
+        projectId={activeThread.projectId}
       />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>

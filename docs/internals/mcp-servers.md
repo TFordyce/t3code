@@ -25,7 +25,9 @@ they are (their URL is already the proxy address) and let the provider reach the
 session bearer. Do not translate an entry's headers into the provider's native config, and do
 not have an adapter refresh or sign in on its own. Claude's adapter uses `${VAR}` placeholders
 to pass the session bearer and stdio environment values without putting them in argv. Those
-are never upstream headers.
+are never upstream headers. Cursor reads the session's servers at the start of each turn and
+passes them when it creates or resumes its agent. It never sets them on `send()`, because a
+send-time override turns off the servers the agent already loaded.
 
 Providers declare what they can carry in `tools.userMcpTransports`
 ([`userMcpTransports.ts`](../../apps/server/src/provider/userMcpTransports.ts)). Pi's answer

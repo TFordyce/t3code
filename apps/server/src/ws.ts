@@ -104,7 +104,6 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { patchChangesProjectMcpServers } from "@t3tools/shared/mcpServers";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -2415,21 +2414,16 @@ const layerWsRpc = (
                 )
               : undefined;
             const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
-            // Clients resend a project's whole override entry, so only a real
-            // change to its MCP servers needs providers-manage; the static
-            // scope check cannot see the stored value.
-            if (patch.projectSettingsOverrides !== undefined) {
-              const stored = ServerSettings.redactServerSettingsForClient(
-                yield* serverSettings.getSettings,
-              );
-              if (patchChangesProjectMcpServers(stored, patch)) {
-                yield* authorizeEffect(AuthProvidersManageScope, Effect.void);
-              }
-            }
-            const settings = yield* providerInstanceMutation === undefined
-              ? serverSettings.updateSettings(nextPatch)
-              : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
-            return ServerSettings.redactServerSettingsForClient(settings);
+            return yield* ServerSettings.updateSettingsForClient({
+              patch: nextPatch,
+              providerInstanceMutation,
+              canManageProviders: currentSession.scopes.includes(AuthProvidersManageScope),
+            }).pipe(
+              Effect.provideService(ServerSettings.ServerSettingsService, serverSettings),
+              Effect.catchTag("ProvidersManageRequiredError", () =>
+                Effect.fail(rpcAuthorizationError(AuthProvidersManageScope)),
+              ),
+            );
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
         [WS_METHODS.serverGetTraceDiagnostics]: (_input) =>

@@ -5,18 +5,19 @@
  *
  * @module ThreadMcpPanel
  */
-import type { EnvironmentId, McpSessionServerStatus } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import {
+  mcpServerListRows,
+  mcpThreadFallback,
+} from "@t3tools/client-runtime/state/mcp-server-checks";
+import type { EnvironmentId, McpSessionServerStatus, ProjectId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 
-import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { serverEnvironment } from "../../state/server";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import {
-  MCP_STATUS_LABELS,
-  threadMcpRows,
-  type McpServerCheckSummary,
-} from "./ThreadMcpPanel.logic";
+import { MCP_STATUS_LABELS, threadMcpRows } from "./ThreadMcpPanel.logic";
 
 const STATUS_BADGE_VARIANT = {
   connecting: "info",
@@ -32,19 +33,18 @@ export function ThreadMcpPanel(props: {
   readonly environmentId: EnvironmentId;
   /** The provider session's report, or `null` when it reported nothing. */
   readonly sessionServers: ReadonlyArray<McpSessionServerStatus> | null;
-  /** The server check for a configured server, once checks exist. */
-  readonly serverCheckFor?: (name: string) => McpServerCheckSummary | undefined;
+  /** The thread's project, whose own servers join the environment's. */
+  readonly projectId: ProjectId;
 }) {
-  const configured = useEnvironmentSettings(props.environmentId, (settings) => settings.mcpServers);
-  const rows = useMemo(
-    () =>
-      threadMcpRows({
-        sessionServers: props.sessionServers,
-        configuredNames: Object.keys(configured),
-        ...(props.serverCheckFor === undefined ? {} : { serverCheckFor: props.serverCheckFor }),
-      }),
-    [configured, props.serverCheckFor, props.sessionServers],
-  );
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const rows = useMemo(() => {
+    const fallback =
+      settings === null || settings === undefined
+        ? { configuredNames: [] }
+        : mcpThreadFallback(mcpServerListRows({ settings, config, projectId: props.projectId }));
+    return threadMcpRows({ sessionServers: props.sessionServers, ...fallback });
+  }, [config, props.projectId, props.sessionServers, settings]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3">

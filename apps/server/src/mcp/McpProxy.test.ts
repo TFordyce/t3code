@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/http";
 
 import * as ServerSettings from "../serverSettings.ts";
+import type * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProxy from "./McpProxy.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpSignIn from "./McpSignIn.ts";
@@ -47,11 +48,12 @@ const startFakeMcpServer = Effect.acquireRelease(
               });
               if (req.url === "/sse") {
                 res.writeHead(200, { "content-type": "text/event-stream" });
-                res.write("data: one\n\n");
-                setTimeout(() => {
+                // The second event goes out once the first is flushed, so the
+                // stream arrives in two chunks without a timer.
+                res.write("data: one\n\n", () => {
                   res.write("data: two\n\n");
                   res.end();
-                }, 20);
+                });
                 return;
               }
               if (req.url === "/needs-auth") {
@@ -85,7 +87,7 @@ const startFakeMcpServer = Effect.acquireRelease(
 const upstreamUrl = (server: NodeHttp.Server, path: string) =>
   `http://127.0.0.1:${(server.address() as AddressInfo).port}${path}`;
 
-const sessionScope = {
+const sessionScope: McpInvocationContext.McpThreadInvocationScope = {
   environmentId,
   requestNamespace: "provider-session",
   thread: {
@@ -96,7 +98,7 @@ const sessionScope = {
   client: undefined,
   capabilities: new Set(["orchestration"]),
   issuedAt: 1,
-} as const;
+};
 
 const header = (name: string, value: string, sensitive = false) => ({ name, value, sensitive });
 
@@ -167,8 +169,7 @@ const withProxy = <A, E, R>(
         Layer.provideMerge(
           Layer.mergeAll(
             Layer.mock(McpSessionRegistry.McpSessionRegistry)({
-              resolve: (token) =>
-                Effect.succeed(token === BEARER ? (sessionScope as never) : undefined),
+              resolve: (token) => Effect.succeed(token === BEARER ? sessionScope : undefined),
             }),
             ServerSettings.layerTest(),
             layerMemorySecretStore,

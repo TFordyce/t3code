@@ -209,4 +209,26 @@ it.layer(NodeServices.layer)("server settings mcpServers", (it) => {
       assert.strictEqual(loaded.worktreesDirectory, "kept");
     }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
+
+  it.effect("requires providers-manage only for a real change to project MCP servers", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const update = (patch: ServerSettingsPatch, canManageProviders: boolean) =>
+        ServerSettingsModule.updateSettingsForClient({ patch, canManageProviders });
+
+      const denied = yield* update(addProjectOverride("ghp_work"), false).pipe(Effect.flip);
+      assert.strictEqual(denied._tag, "ProvidersManageRequiredError");
+      assert.deepStrictEqual((yield* settings.getSettings).projectSettingsOverrides, {});
+
+      yield* update(addProjectOverride("ghp_work"), true);
+
+      // A client resends the whole entry redacted; that is not a change.
+      const resent = {
+        projectSettingsOverrides: ServerSettingsModule.redactServerSettingsForClient(
+          yield* settings.getSettings,
+        ).projectSettingsOverrides,
+      };
+      yield* update(resent, false);
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
 });
