@@ -53,6 +53,7 @@ import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
 import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
+import { ThreadMcpSheet } from "./features/threads/ThreadMcpSheet";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { McpAppFullscreenScreen } from "./features/threads/McpAppFullscreenScreen";
@@ -80,6 +81,7 @@ import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppea
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsDiagnosticsRouteScreen";
 import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
+import { SettingsMcpServersRouteScreen } from "./features/settings/SettingsMcpServersRouteScreen";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
@@ -242,6 +244,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       screen: SettingsProviderAccountsRouteScreen,
       linking: "provider-accounts",
       options: { title: "Provider accounts" },
+    }),
+    SettingsMcpServers: createNativeStackScreen({
+      screen: SettingsMcpServersRouteScreen,
+      linking: "mcp-servers",
+      options: { title: "MCP servers" },
     }),
     SettingsEnvironmentMaintenance: createNativeStackScreen({
       screen: SettingsEnvironmentMaintenanceRouteScreen,
@@ -555,6 +562,7 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "SettingsLegal",
   "SettingsSheet",
   "ThreadAgents",
+  "ThreadMcp",
   "ThreadQueue",
   "ThreadReviewComment",
   "ThreadDevicePreview",
@@ -803,6 +811,15 @@ const RootStackConfig = createWorkspaceStackNavigator({
     }),
     ThreadAgents: createNativeStackScreen({
       screen: ThreadAgentsSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.5, 0.9],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadMcp: createNativeStackScreen({
+      screen: ThreadMcpSheet,
       options: {
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         headerShown: false,
