@@ -415,6 +415,14 @@
       "types": "./src/codexAuthCallback.ts",
       "import": "./src/codexAuthCallback.ts"
     },
+    "./loopbackOAuthCallback": {
+      "types": "./src/loopbackOAuthCallback.ts",
+      "import": "./src/loopbackOAuthCallback.ts"
+    },
+    "./mcpSignInCallback": {
+      "types": "./src/mcpSignInCallback.ts",
+      "import": "./src/mcpSignInCallback.ts"
+    },
     "./codexAuthHandoff": {
       "types": "./src/codexAuthHandoff.ts",
       "import": "./src/codexAuthHandoff.ts"

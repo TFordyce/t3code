@@ -23,10 +23,12 @@ import {
   selectMcpServerCheck,
 } from "@t3tools/client-runtime/state/mcp-server-checks";
 import { LockIcon, LockOpenIcon, PlusIcon, XIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { isLoopbackHost } from "@t3tools/shared/preview";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { ensureLocalApi } from "../../localApi";
+import { useEnvironmentHttpBaseUrl } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
@@ -53,6 +55,7 @@ import {
   projectMcpPatch,
   projectMcpRows,
   providersWithoutMcpSupport,
+  relayMcpSignIn,
   saveNotice,
   selectProjectMcpCheck,
   urlQueryTokenWarning,
@@ -522,6 +525,18 @@ function McpSignInControls({
   const signOut = useAtomCommand(serverEnvironment.signOutMcpServer, { label: "MCP sign-out" });
   const [pending, setPending] = useState(false);
   const [callbackUrl, setCallbackUrl] = useState("");
+  const [notice, setNotice] = useState<string>();
+  const httpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
+  const remote = httpBaseUrl !== null && !isLoopbackHost(new URL(httpBaseUrl).hostname);
+  // The redirect this computer is waiting for, so leaving the page frees its port.
+  const receiving = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      const url = receiving.current;
+      if (url) void window.desktopBridge?.cancelMcpSignInCallback?.(url).catch(() => undefined);
+    },
+    [],
+  );
   const control = mcpSignInControl(config, check);
   if (control.kind === "none") return null;
   if (control.kind === "blocked") {
@@ -545,8 +560,36 @@ function McpSignInControls({
               }
               const result = await startSignIn({ environmentId, input: target });
               if (result._tag !== "Success") return;
-              setPending(true);
-              await ensureLocalApi().shell.openExternal(result.value.authorizationUrl);
+              const { authorizationUrl } = result.value;
+              setNotice(undefined);
+              if (!remote) {
+                setPending(true);
+                await ensureLocalApi().shell.openExternal(authorizationUrl);
+                return;
+              }
+              // A remote host cannot see this computer's loopback, so desktop catches the redirect.
+              const receive = window.desktopBridge?.receiveMcpSignInCallback;
+              receiving.current = authorizationUrl;
+              if (!receive) setPending(true);
+              const outcome = await relayMcpSignIn({
+                authorizationUrl,
+                receive,
+                openExternal: (url) => ensureLocalApi().shell.openExternal(url),
+                complete: async (callback) =>
+                  (
+                    await completeSignIn({
+                      environmentId,
+                      input: { ...target, callbackUrl: callback },
+                    })
+                  )._tag === "Success",
+              });
+              receiving.current = null;
+              if (outcome.kind === "paste") {
+                setNotice(outcome.notice);
+                setPending(true);
+              } else {
+                setPending(false);
+              }
             }}
           >
             {signedIn ? "Sign out" : control.label}
@@ -582,6 +625,9 @@ function McpSignInControls({
             Finish
           </Button>
         </form>
+      ) : null}
+      {notice && pending && !signedIn ? (
+        <p className="text-xs text-muted-foreground">{notice}</p>
       ) : null}
     </div>
   );
