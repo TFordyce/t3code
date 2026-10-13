@@ -226,9 +226,7 @@ export class ServerSettingsService extends Context.Service<
 }
 
 /** A client patch changes project MCP servers without the providers-manage grant. */
-class ProvidersManageRequiredError extends Data.TaggedError(
-  "ProvidersManageRequiredError",
-)<{}> {}
+class ProvidersManageRequiredError extends Data.TaggedError("ProvidersManageRequiredError")<{}> {}
 
 /**
  * Applies a client's settings update and returns the client view. Clients

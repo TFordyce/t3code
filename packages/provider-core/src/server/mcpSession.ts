@@ -1,3 +1,4 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto is async; the fingerprint is needed synchronously.
 import { createHash } from "node:crypto";
 
 import type {
