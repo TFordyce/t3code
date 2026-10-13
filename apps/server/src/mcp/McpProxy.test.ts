@@ -13,6 +13,8 @@ import { FetchHttpClient, HttpBody, HttpClient, HttpClientRequest, HttpRouter } 
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpProxy from "./McpProxy.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
+import * as McpSignIn from "./McpSignIn.ts";
+import { layerMemorySecretStore } from "./McpSignIn.testkit.ts";
 import * as McpUpstream from "./McpUpstream.ts";
 
 const environmentId = EnvironmentId.make("environment-proxy-test");
@@ -161,6 +163,7 @@ const withProxy = <A, E, R>(
         McpUpstream.layer.pipe(Layer.provide(FetchHttpClient.layer)),
         McpProviderSessions.layer,
       ).pipe(
+        Layer.provideMerge(McpSignIn.layer),
         Layer.provideMerge(
           Layer.mergeAll(
             Layer.mock(McpSessionRegistry.McpSessionRegistry)({
@@ -168,6 +171,7 @@ const withProxy = <A, E, R>(
                 Effect.succeed(token === BEARER ? (sessionScope as never) : undefined),
             }),
             ServerSettings.layerTest(),
+            layerMemorySecretStore,
           ),
         ),
         Layer.provideMerge(NodeHttpServer.layerTest),

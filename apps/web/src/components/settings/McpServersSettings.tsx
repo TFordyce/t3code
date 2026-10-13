@@ -19,12 +19,14 @@ import type {
 import { useAtomValue } from "@effect/atom-react";
 import {
   describeMcpServerCheck,
+  mcpSignInControl,
   selectMcpServerCheck,
 } from "@t3tools/client-runtime/state/mcp-server-checks";
 import { LockIcon, LockOpenIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { ensureLocalApi } from "../../localApi";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
@@ -213,6 +215,7 @@ function McpServersEnvironmentPanel({
                 check={selectProjectMcpCheck(serverConfig, projectId, row.name, row.kind)}
                 environmentLabel={environmentLabel}
                 canCheck={canCheck}
+                signIn={{ environmentId, target: { scope: projectId, name: row.name }, canManage }}
                 onCheck={() =>
                   void checkServers({
                     environmentId,
@@ -254,6 +257,7 @@ function McpServersEnvironmentPanel({
                 check={selectProjectMcpCheck(serverConfig, projectId, row.name, "global")}
                 environmentLabel={environmentLabel}
                 readOnly={!canManage}
+                signIn={{ environmentId, target: { scope: "global", name: row.name }, canManage }}
                 onTurnOff={(off) => saveProject(row.name, off ? { enabled: false } : null)}
                 onOverride={(config) => saveProject(row.name, config)}
               />
@@ -330,6 +334,7 @@ function McpServersEnvironmentPanel({
                 check={selectMcpServerCheck(serverConfig, "global", name)}
                 environmentLabel={environmentLabel}
                 canCheck={canCheck}
+                signIn={{ environmentId, target: { scope: "global", name }, canManage }}
                 onCheck={() =>
                   void checkServers({
                     environmentId,
@@ -368,7 +373,9 @@ function McpServerRow({
   onRemove,
   badge,
   onUseEnvironmentConfig,
+  signIn,
 }: {
+  readonly signIn: McpSignInProps;
   readonly name: string;
   readonly config: McpServerConfig;
   readonly badge?: ReactNode;
@@ -405,6 +412,7 @@ function McpServerRow({
               {check === undefined ? null : ` · checked on ${environmentLabel}`}
             </p>
           ) : null}
+          {enabled ? <McpSignInControls {...signIn} config={config} check={check} /> : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {enabled && canCheck ? (
@@ -482,6 +490,102 @@ function McpServerRow({
   );
 }
 
+interface McpSignInProps {
+  readonly environmentId: EnvironmentId;
+  /** The sign-in this row uses: the environment's for an inherited server. */
+  readonly target: { readonly scope: string; readonly name: string };
+  readonly canManage: boolean;
+}
+
+/**
+ * Sign in, sign out and the paste field for an OAuth server. The browser
+ * redirect lands on the environment host; a remote client finishes by pasting
+ * the final localhost URL here.
+ */
+function McpSignInControls({
+  environmentId,
+  target,
+  canManage,
+  config,
+  check,
+}: McpSignInProps & {
+  readonly config: McpServerConfig;
+  readonly check: McpServerCheck | undefined;
+}) {
+  const startSignIn = useAtomCommand(serverEnvironment.startMcpServerSignIn, {
+    label: "start MCP sign-in",
+  });
+  const completeSignIn = useAtomCommand(serverEnvironment.completeMcpServerSignIn, {
+    label: "complete MCP sign-in",
+  });
+  const signOut = useAtomCommand(serverEnvironment.signOutMcpServer, { label: "MCP sign-out" });
+  const [pending, setPending] = useState(false);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const control = mcpSignInControl(config, check);
+  if (control.kind === "none") return null;
+  if (control.kind === "blocked") {
+    return <p className="text-xs text-muted-foreground">{control.message}</p>;
+  }
+  const signedIn = control.kind === "signed-in";
+  if (!canManage && !signedIn) return null;
+  return (
+    <div className="mt-1 space-y-1">
+      <div className="flex items-center gap-2">
+        {signedIn ? <span className="text-xs text-muted-foreground">Signed in</span> : null}
+        {canManage ? (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={async () => {
+              if (signedIn) {
+                setPending(false);
+                await signOut({ environmentId, input: target });
+                return;
+              }
+              const result = await startSignIn({ environmentId, input: target });
+              if (result._tag !== "Success") return;
+              setPending(true);
+              await ensureLocalApi().shell.openExternal(result.value.authorizationUrl);
+            }}
+          >
+            {signedIn ? "Sign out" : control.label}
+          </Button>
+        ) : null}
+      </div>
+      {pending && !signedIn ? (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void completeSignIn({
+              environmentId,
+              input: { ...target, callbackUrl: callbackUrl.trim() },
+            }).then((result) => {
+              if (result._tag === "Success") {
+                setPending(false);
+                setCallbackUrl("");
+              }
+            });
+          }}
+        >
+          <Input
+            aria-label="Sign-in redirect URL"
+            font="mono"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="Paste the final http://127.0.0.1... address if this page did not finish"
+            value={callbackUrl}
+            onChange={(event) => setCallbackUrl(event.target.value)}
+          />
+          <Button type="submit" size="xs" disabled={callbackUrl.trim().length === 0}>
+            Finish
+          </Button>
+        </form>
+      ) : null}
+    </div>
+  );
+}
+
 /** An environment server as a project sees it: switch it off for the project, or override it. */
 function InheritedMcpServerRow({
   row,
@@ -492,7 +596,9 @@ function InheritedMcpServerRow({
   readOnly,
   onTurnOff,
   onOverride,
+  signIn,
 }: {
+  readonly signIn: McpSignInProps;
   readonly row: InheritedMcpRow;
   readonly existingNames: ReadonlyArray<string>;
   readonly providers: ReadonlyArray<ServerProvider>;
@@ -517,6 +623,9 @@ function InheritedMcpServerRow({
               ? "Off on environment"
               : `${describeMcpServerCheck(check)}${check === undefined ? "" : ` · checked on ${environmentLabel}`}`}
           </p>
+          {row.offOnEnvironment ? null : (
+            <McpSignInControls {...signIn} config={config} check={check} />
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {!readOnly && !row.offOnEnvironment ? (
@@ -644,6 +753,43 @@ function McpServerForm({
               </p>
             ) : null}
           </label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-foreground">
+                OAuth client ID (optional)
+              </span>
+              <Input
+                aria-label="OAuth client ID"
+                aria-invalid={touched && errors.oauthClientId !== undefined}
+                font="mono"
+                autoCapitalize="none"
+                spellCheck={false}
+                placeholder="Registered automatically"
+                value={draft.oauthClientId}
+                onChange={(event) => setDraft({ ...draft, oauthClientId: event.target.value })}
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-foreground">OAuth client secret</span>
+              <Input
+                aria-label="OAuth client secret"
+                font="mono"
+                autoComplete="off"
+                spellCheck={false}
+                type="password"
+                placeholder={draft.oauthClientSecretRedacted ? "Stored securely" : "Optional"}
+                value={draft.oauthClientSecret}
+                onChange={(event) =>
+                  setDraft({
+                    ...draft,
+                    oauthClientSecret: event.target.value,
+                    oauthClientSecretRedacted: false,
+                  })
+                }
+              />
+            </label>
+          </div>
+          {touched && errors.oauthClientId ? <FieldError>{errors.oauthClientId}</FieldError> : null}
           <SecretRows
             title="Headers"
             addLabel="Add header"

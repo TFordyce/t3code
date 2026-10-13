@@ -5,7 +5,11 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
-import { planSettingsSecretPersist, redactSettingsSecrets } from "./serverSettingsSecrets.ts";
+import {
+  mcpSignInSecretKey,
+  planSettingsSecretPersist,
+  redactSettingsSecrets,
+} from "./serverSettingsSecrets.ts";
 
 const stdioWith = (env: ReadonlyArray<{ name: string; value: string; sensitive: boolean }>) =>
   ({ transport: "stdio", command: "npx", args: [], env }) as const;
@@ -208,5 +212,98 @@ describe("project MCP override secrets", () => {
         secretName: projectEnvKey("gh", "TOKEN"),
       },
     ]);
+  });
+});
+
+describe("MCP OAuth client secrets", () => {
+  const withOAuth = (clientSecret: string) =>
+    withMcp({
+      docs: {
+        transport: "http",
+        url: "https://mcp.example.com/mcp",
+        headers: [],
+        oauth: { clientId: "client-1", clientSecret: { value: clientSecret } },
+      },
+    });
+  const mcpOnly = <Change extends { readonly secretName: string }>(
+    changes: ReadonlyArray<Change>,
+  ) => changes.filter((change) => change.secretName.startsWith("mcp-"));
+  const secretKey = `mcp-oauth-client-secret-${encode("global")}-${encode("docs")}`;
+
+  it("stores the client secret and redacts it for clients", () => {
+    const saved = planSettingsSecretPersist(DEFAULT_SERVER_SETTINGS, withOAuth("shh"));
+    const docs = saved.settings.mcpServers.docs;
+    expect(docs?.transport === "http" ? docs.oauth : undefined).toEqual({
+      clientId: "client-1",
+      clientSecret: { value: "", valueRedacted: true },
+    });
+    expect(mcpOnly(saved.changes)).toMatchObject([{ kind: "write", secretName: secretKey }]);
+    expect(JSON.stringify(redactSettingsSecrets(withOAuth("shh")))).not.toContain("shh");
+  });
+
+  it("keeps a stored secret when the redacted row is sent back and sweeps it on removal", () => {
+    const stored = planSettingsSecretPersist(DEFAULT_SERVER_SETTINGS, withOAuth("shh")).settings;
+    expect(mcpOnly(planSettingsSecretPersist(stored, stored).changes)).toEqual([]);
+    expect(
+      planSettingsSecretPersist(stored, withMcp({})).changes.filter(
+        (c) => c.secretName === secretKey,
+      ),
+    ).toMatchObject([{ kind: "remove", secretName: secretKey }]);
+  });
+});
+
+describe("clearing MCP sign-ins", () => {
+  const projectId = ProjectId.make("project-a");
+  const http = (overrides: Record<string, unknown> = {}) =>
+    ({
+      transport: "http",
+      url: "https://mcp.example.com/mcp",
+      headers: [],
+      oauth: { clientId: "client-1" },
+      ...overrides,
+    }) as never;
+  const clears = (before: ServerSettings, after: ServerSettings) =>
+    planSettingsSecretPersist(before, after)
+      .changes.filter((change) => change.secretName === mcpSignInSecretKey("global", "docs"))
+      .map((change) => change.kind);
+
+  it.each([
+    ["removing the entry", withMcp({})],
+    ["changing the url", withMcp({ docs: http({ url: "https://other.example.com/mcp" }) })],
+    ["moving off http", withMcp({ docs: stdioWith([]) })],
+    ["changing the OAuth client id", withMcp({ docs: http({ oauth: { clientId: "client-2" } }) })],
+  ])("is cleared by %s", (_label, after) => {
+    expect(clears(withMcp({ docs: http() }), after)).toEqual(["remove"]);
+  });
+
+  it.each([
+    ["toggling enabled", withMcp({ docs: http({ enabled: false }) })],
+    [
+      "editing a header other than Authorization",
+      withMcp({ docs: http({ headers: [{ name: "X-Team", value: "a", sensitive: false }] }) }),
+    ],
+    [
+      "adding a project marker",
+      {
+        ...withMcp({ docs: http() }),
+        projectSettingsOverrides: { [projectId]: { mcpServers: { docs: { enabled: false } } } },
+      } as ServerSettings,
+    ],
+  ])("is kept by %s", (_label, after) => {
+    expect(clears(withMcp({ docs: http() }), after)).toEqual([]);
+  });
+
+  it("clears a project override's sign-in when the project's overrides are deleted", () => {
+    const before = {
+      ...DEFAULT_SERVER_SETTINGS,
+      projectSettingsOverrides: { [projectId]: { mcpServers: { docs: http() } } },
+    } as ServerSettings;
+    const removed = planSettingsSecretPersist(before, {
+      ...before,
+      projectSettingsOverrides: {},
+    }).changes;
+    expect(removed.map((change) => change.secretName)).toContain(
+      mcpSignInSecretKey(`project:${projectId}`, "docs"),
+    );
   });
 });

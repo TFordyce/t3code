@@ -1,10 +1,11 @@
 /**
  * Talks to a user's HTTP MCP server from the host.
  *
- * Every consumer that reaches a user server (the loopback proxy today, server
- * checks and sign-in later) goes through here, so the entry's headers are
- * materialized in one place and always from the current settings. Providers
- * never see them.
+ * Every consumer that reaches a user server (the loopback proxy and server
+ * checks) goes through here, so the entry's headers are materialized in one
+ * place and always from the current settings. Providers never see them. When
+ * the entry has no `Authorization` header of its own and is signed in, the
+ * sign-in's bearer is added, refreshed before expiry and once after a 401.
  *
  * @module McpUpstream
  */
@@ -24,6 +25,7 @@ import {
 } from "effect/http";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as McpSignIn from "./McpSignIn.ts";
 
 /** An HTTP user server as currently configured, with real header values. */
 export interface McpUpstreamEntry {
@@ -31,6 +33,8 @@ export interface McpUpstreamEntry {
   /** Compare with a session's `upstreamUrlFingerprint` to see whether the URL changed. */
   readonly urlFingerprint: string;
   readonly headers: Readonly<Record<string, string>>;
+  /** Present when a sign-in may supply the bearer: no own `Authorization` header. */
+  readonly signIn?: McpSignIn.McpSignInTarget;
 }
 
 export interface McpUpstreamRequest {
@@ -70,6 +74,7 @@ export class McpUpstream extends Context.Service<
 
 const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
+  const signIn = yield* McpSignIn.McpSignIn;
   const httpClient = HttpClient.withScope(yield* HttpClient.HttpClient);
 
   const resolve: McpUpstream["Service"]["resolve"] = Effect.fn("McpUpstream.resolve")(
@@ -98,13 +103,27 @@ const make = Effect.gen(function* () {
         url: config.url,
         urlFingerprint: upstreamUrlFingerprint(config.url),
         headers: Object.fromEntries(config.headers.map((row) => [row.name, row.value])),
+        // An inherited entry uses the environment's sign-in; an override has its own.
+        ...(McpSignIn.hasAuthorizationHeader(config)
+          ? {}
+          : {
+              signIn: {
+                scope: resolved?.source === "global" || projectId === null ? "global" : projectId,
+                name,
+                url: config.url,
+              },
+            }),
       } satisfies McpUpstreamEntry;
     },
   );
 
-  const send: McpUpstream["Service"]["send"] = (entry, request) => {
+  const execute = (entry: McpUpstreamEntry, request: McpUpstreamRequest, bearer?: string) => {
     const base = HttpClientRequest.make(request.method as "POST")(entry.url).pipe(
-      HttpClientRequest.setHeaders({ ...request.headers, ...entry.headers }),
+      HttpClientRequest.setHeaders({
+        ...request.headers,
+        ...entry.headers,
+        ...(bearer === undefined ? {} : { authorization: `Bearer ${bearer}` }),
+      }),
     );
     return httpClient
       .execute(
@@ -112,6 +131,19 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }));
   };
+
+  const send: McpUpstream["Service"]["send"] = Effect.fn("McpUpstream.send")(
+    function* (entry, request) {
+      const bearer = entry.signIn === undefined ? undefined : yield* signIn.bearer(entry.signIn);
+      const response = yield* execute(entry, request, bearer);
+      // A 401 means the request did not run, so one refresh and retry is safe.
+      if (response.status !== 401 || entry.signIn === undefined || bearer === undefined) {
+        return response;
+      }
+      const refreshed = yield* signIn.refreshAfterUnauthorized(entry.signIn, bearer);
+      return refreshed === undefined ? response : yield* execute(entry, request, refreshed);
+    },
+  );
 
   return McpUpstream.of({ resolve, send });
 });

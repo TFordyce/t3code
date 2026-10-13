@@ -17,6 +17,8 @@ import { FetchHttpClient } from "effect/http";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpServerChecks from "./McpServerChecks.ts";
+import * as McpSignIn from "./McpSignIn.ts";
+import { layerMemorySecretStore } from "./McpSignIn.testkit.ts";
 import * as McpUpstream from "./McpUpstream.ts";
 
 const fixture = fileURLToPath(new URL("./fakeMcpStdioServer.fixture.mjs", import.meta.url));
@@ -102,6 +104,8 @@ const url = (server: NodeHttp.Server, path: string) =>
 const layerFor = (timeoutMs: number) =>
   McpServerChecks.layerWithTimeout(timeoutMs).pipe(
     Layer.provideMerge(McpUpstream.layer.pipe(Layer.provide(FetchHttpClient.layer))),
+    Layer.provideMerge(McpSignIn.layer),
+    Layer.provideMerge(layerMemorySecretStore),
     Layer.provideMerge(ServerSettings.layerTest()),
   );
 
@@ -124,6 +128,8 @@ const streamingSettings = Layer.unwrap(
 const feedLayer = (timeoutMs: number) =>
   McpServerChecks.layerWithTimeout(timeoutMs).pipe(
     Layer.provideMerge(McpUpstream.layer.pipe(Layer.provide(FetchHttpClient.layer))),
+    Layer.provideMerge(McpSignIn.layer),
+    Layer.provideMerge(layerMemorySecretStore),
     Layer.provideMerge(streamingSettings),
   );
 

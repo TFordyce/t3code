@@ -59,6 +59,22 @@ const isHttpUrl = (value: string) => {
   }
 };
 
+/**
+ * The OAuth client a user registered with an HTTP server's authorization
+ * server. Without one, sign-in registers a client dynamically. The secret is a
+ * sensitive row: stored on the host, and only `valueRedacted` reaches clients.
+ */
+export const McpOAuthClient = Schema.Struct({
+  clientId: TrimmedNonEmptyString,
+  clientSecret: Schema.optionalKey(
+    Schema.Struct({
+      value: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+      valueRedacted: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+});
+export type McpOAuthClient = typeof McpOAuthClient.Type;
+
 /** A streamable HTTP server. Providers reach it through the T3 loopback proxy, never directly. */
 export const McpHttpServerConfig = Schema.Struct({
   transport: Schema.Literal("http"),
@@ -66,6 +82,8 @@ export const McpHttpServerConfig = Schema.Struct({
     Schema.makeFilter((value) => isHttpUrl(value) || "Must be an http(s) URL."),
   ),
   headers: Schema.Array(McpServerHeader).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Only used when the server asks for sign-in; see {@link McpOAuthClient}. */
+  oauth: Schema.optionalKey(McpOAuthClient),
   /** Absent means enabled. */
   enabled: Schema.optionalKey(Schema.Boolean),
 });
@@ -137,6 +155,10 @@ export const McpServerCheckStatus = Schema.Literals([
 ]);
 export type McpServerCheckStatus = typeof McpServerCheckStatus.Type;
 
+/** Sign-in state of an OAuth-protected server. */
+export const McpServerAuthState = Schema.Literals(["signed-in", "expired", "signed-out"]);
+export type McpServerAuthState = typeof McpServerAuthState.Type;
+
 /**
  * The result of T3's own check of one configured server, run from the
  * environment host. `scope` is `"global"` or the ID of the project whose
@@ -150,6 +172,8 @@ export const McpServerCheck = Schema.Struct({
   checkedAt: Schema.String,
   toolCount: Schema.optionalKey(Schema.Number),
   error: Schema.optionalKey(Schema.String),
+  /** Absent for a server that has never shown OAuth. */
+  auth: Schema.optionalKey(McpServerAuthState),
 });
 export type McpServerCheck = typeof McpServerCheck.Type;
 
@@ -168,6 +192,22 @@ export const CheckMcpServersInput = Schema.Struct({
   targets: Schema.optional(Schema.Array(McpServerCheckTarget)),
 });
 export type CheckMcpServersInput = typeof CheckMcpServersInput.Type;
+
+/** Starting a sign-in returns where the user authorizes; the redirect lands on the host. */
+export const McpServerSignInStarted = Schema.Struct({ authorizationUrl: Schema.String });
+export type McpServerSignInStarted = typeof McpServerSignInStarted.Type;
+
+export const CompleteMcpServerSignInInput = Schema.Struct({
+  ...McpServerCheckTarget.fields,
+  /** The final localhost URL the browser was sent to, pasted or relayed by desktop. */
+  callbackUrl: Schema.String,
+});
+export type CompleteMcpServerSignInInput = typeof CompleteMcpServerSignInInput.Type;
+
+export class McpServerSignInError extends Schema.TaggedError<McpServerSignInError>()(
+  "McpServerSignInError",
+  { message: Schema.String },
+) {}
 
 /** A project's bare marker that turns the environment entry of the same name off. */
 export const McpServerDisabledMarker = Schema.Struct({ enabled: Schema.Literal(false) });

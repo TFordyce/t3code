@@ -365,3 +365,39 @@ describe("selectProjectMcpCheck", () => {
     expect(selectProjectMcpCheck(config, "project-a", "gh", "global")?.status).toBe("connected");
   });
 });
+
+describe("OAuth client in a draft", () => {
+  const http = (oauth?: unknown) =>
+    ({
+      transport: "http",
+      url: "https://mcp.example.com/mcp",
+      headers: [],
+      oauth,
+    }) as McpServerConfig;
+
+  it("round-trips a client ID and sends a stored secret back redacted", () => {
+    const stored = http({ clientId: "abc", clientSecret: { value: "", valueRedacted: true } });
+    expect(configFromDraft(draftFromConfig("docs", stored))).toEqual(stored);
+  });
+
+  it("sends a retyped secret as its new value and leaves oauth out when blank", () => {
+    const draft = draftFromConfig("docs", http({ clientId: "abc" }));
+    expect(configFromDraft({ ...draft, oauthClientSecret: "new" })).toMatchObject({
+      oauth: { clientId: "abc", clientSecret: { value: "new" } },
+    });
+    expect("oauth" in configFromDraft({ ...draft, oauthClientId: " " })).toBe(false);
+  });
+
+  it("asks for a client ID when only a secret is entered", () => {
+    const draft = { ...draftFromConfig("docs", http()), name: "docs", oauthClientSecret: "s" };
+    expect(validateDraft(draft, { existingNames: [], isNew: true }).oauthClientId).toBeDefined();
+  });
+
+  it("does not copy a stored client secret into a project override", () => {
+    const stored = http({ clientId: "abc", clientSecret: { value: "", valueRedacted: true } });
+    const draft = overrideDraftFromEnvironment("docs", stored);
+    expect(draft.oauthClientSecretRedacted).toBe(false);
+    expect(configFromDraft(draft)).toMatchObject({ oauth: { clientId: "abc" } });
+    expect(JSON.stringify(configFromDraft(draft))).not.toContain("valueRedacted");
+  });
+});

@@ -10,6 +10,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
+import { mcpSignInSecretKey } from "./serverSettingsSecrets.ts";
 
 const layerServerSettingsWithSecrets = () =>
   ServerSettingsModule.layer.pipe(
@@ -149,6 +150,40 @@ it.layer(NodeServices.layer)("server settings mcpServers", (it) => {
       assert.deepStrictEqual((yield* settings.getSettings).projectSettingsOverrides, {});
       assert.isTrue(Option.isNone(yield* store.get(projectTokenKey)));
     }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect(
+    "a URL change deletes the sign-in; toggling enabled and project deletion follow the rules",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsModule.ServerSettingsService;
+        const store = yield* ServerSecretStore.ServerSecretStore;
+        const http = (url: string, extra: Record<string, unknown> = {}) =>
+          ({ transport: "http", url, headers: [], ...extra }) as const;
+        const globalKey = mcpSignInSecretKey("global", "docs");
+        const projectKey = mcpSignInSecretKey(`project:${projectId}`, "docs");
+        yield* settings.updateSettings({
+          mcpServers: { docs: http("https://a.example.com/mcp") },
+          projectSettingsOverrides: {
+            [projectId]: { mcpServers: { docs: http("https://p.example.com/mcp") } },
+          },
+        });
+        const bundle = new TextEncoder().encode("{}");
+        yield* store.set(globalKey, bundle);
+        yield* store.set(projectKey, bundle);
+
+        yield* settings.updateSettings({
+          mcpServers: { docs: http("https://a.example.com/mcp", { enabled: false }) },
+        });
+        assert.isTrue(Option.isSome(yield* store.get(globalKey)));
+
+        yield* settings.updateSettings({ mcpServers: { docs: http("https://b.example.com/mcp") } });
+        assert.isTrue(Option.isNone(yield* store.get(globalKey)));
+        assert.isTrue(Option.isSome(yield* store.get(projectKey)));
+
+        yield* settings.updateSettings({ projectSettingsOverrides: { [projectId]: null } });
+        assert.isTrue(Option.isNone(yield* store.get(projectKey)));
+      }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 
   it.effect("drops an invalid stored entry and keeps the rest of the file", () =>
