@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Node http fixture server for loopback tests.
 import * as NodeHttp from "node:http";
 import type * as NodeNet from "node:net";
 import * as NodeURL from "node:url";

@@ -3508,6 +3508,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             reported,
           });
           if (mcpServers === undefined) return;
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - change-detection key, never parsed.
           const key = JSON.stringify(mcpServers);
           if (key === publishedMcpStatuses) return;
           publishedMcpStatuses = key;

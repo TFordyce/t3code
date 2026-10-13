@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalDateInEffect:off globalErrorInEffectCatch:off globalTimersInEffect:off preferSchemaOverJson:off - Loopback OAuth callback server; wraps the MCP SDK's promise API, token expiry is wall-clock, and the JSON is only an equality key.
 /**
  * OAuth sign-in for user HTTP MCP servers, held on the environment host.
  *

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Node http fixture server for loopback tests.
 /**
  * An in-process MCP server and OAuth authorization server for sign-in tests,
  * plus an in-memory secret store. One origin serves both: `/mcp` needs a

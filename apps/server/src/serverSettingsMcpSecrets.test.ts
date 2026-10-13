@@ -1,6 +1,7 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
+  type McpServerConfig,
   type ProjectSettingsOverrides,
   type ServerSettings,
 } from "@t3tools/contracts";
@@ -17,6 +18,9 @@ const withMcp = (mcpServers: ServerSettings["mcpServers"]): ServerSettings => ({
   ...DEFAULT_SERVER_SETTINGS,
   mcpServers,
 });
+const stdioOf = (server: McpServerConfig | undefined) =>
+  server?.transport === "stdio" ? server : undefined;
+
 const encode = (value: string) => Buffer.from(value).toString("base64url");
 const key = (server: string, variable: string) =>
   `mcp-env-${encode("global")}-${encode(server)}-${encode(variable)}`;
@@ -88,7 +92,7 @@ describe("MCP server env secrets", () => {
         ]),
       }),
     );
-    expect(saved.settings.mcpServers.gh?.env).toEqual([
+    expect(stdioOf(saved.settings.mcpServers.gh)?.env).toEqual([
       { name: "TOKEN", value: "", sensitive: true, valueRedacted: true },
       { name: "MODE", value: "fast", sensitive: false },
     ]);
@@ -107,7 +111,7 @@ describe("MCP server env secrets", () => {
       withMcp({ gh: stdioWith([{ name: "TOKEN", value: "ghp_secret", sensitive: true }]) }),
     );
     expect(JSON.stringify(redacted)).not.toContain("ghp_secret");
-    expect(redacted.mcpServers.gh?.env[0]?.valueRedacted).toBe(true);
+    expect(stdioOf(redacted.mcpServers.gh)?.env[0]?.valueRedacted).toBe(true);
   });
 
   it("keeps a stored value when a redacted row is sent back", () => {
@@ -124,7 +128,7 @@ describe("MCP server env secrets", () => {
     });
     const kept = planSettingsSecretPersist(stored, edited);
     expect(mcpChanges(kept)).toEqual([]);
-    expect(kept.settings.mcpServers.gh?.env[0]?.valueRedacted).toBe(true);
+    expect(stdioOf(kept.settings.mcpServers.gh)?.env[0]?.valueRedacted).toBe(true);
   });
 
   it("sweeps the secrets of a removed server", () => {

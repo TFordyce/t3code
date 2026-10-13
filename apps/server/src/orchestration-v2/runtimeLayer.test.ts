@@ -927,13 +927,13 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
           },
         ],
       });
-      const sessionSpy = vi
-        .spyOn(sessions, "get")
-        .mockReturnValue(
-          Effect.succeed(
-            Option.some({ providerSession } as ProviderAdapter.ProviderAdapterV2SessionRuntime),
-          ),
-        );
+      const sessionSpy = vi.spyOn(sessions, "get").mockReturnValue(
+        Effect.succeed(
+          Option.some({
+            providerSession,
+          } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime),
+        ),
+      );
       yield* Effect.addFinalizer(() => Effect.sync(() => sessionSpy.mockRestore()));
 
       const steerCommandId = CommandId.make("runtime-delivery-intent-auto");

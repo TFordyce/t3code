@@ -98,7 +98,7 @@ const applySecretValue = <Row extends ProviderInstanceEnvironmentVariable | McpS
     ...rest,
     value: next.value,
     ...(next.redacted ? { valueRedacted: true } : {}),
-  };
+  } as Row;
 };
 
 const providerEnvironmentKind: SecretKind = {

@@ -270,6 +270,7 @@ const make = (timeout: Duration.Duration) =>
         yield* replace(scope, name, undefined);
         return;
       }
+      // @effect-diagnostics-next-line globalDateInEffect:off - wall-clock timestamp shown to the user.
       const checkedAt = new Date().toISOString();
       const previousAuth = (yield* SubscriptionRef.get(state)).find(
         (row) => row.scope === scope && row.name === name,
