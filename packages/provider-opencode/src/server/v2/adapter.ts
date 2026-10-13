@@ -49,11 +49,13 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
+  type McpSessionServerStatus,
   type ModelSelection,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
   type RunId,
   type RuntimeRequestId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -74,6 +76,7 @@ import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as OpenCode2Client from "./OpenCode2Client.ts";
 import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
+import { openCodeMcpStatus } from "../mcpStatus.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
@@ -97,7 +100,14 @@ import {
 } from "@t3tools/provider-core/server/subagentProjection";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
-import { OPENCODE_PROVIDER, openCodePermissionRequestKind } from "../adapter.ts";
+import {
+  OPENCODE_PROVIDER,
+  openCodePermissionRequestKind,
+  openCodeUserMcpConfig,
+  openCodeUserMcpConfigKey,
+  openCodeUserMcpServers,
+} from "../adapter.ts";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import { openCodeToolTurnItem } from "../toolItems.ts";
 
 const OpenCode2ProviderCapabilities = {
@@ -144,7 +154,7 @@ const OpenCode2ProviderCapabilities = {
     emitsToolCompleted: true,
     emitsToolOutput: true,
     supportsMcpTools: false,
-    userMcpTransports: [],
+    userMcpTransports: ["stdio", "http"],
     supportsDynamicToolCallbacks: false,
   },
   approvals: {
@@ -402,6 +412,12 @@ interface ThreadState {
     | { readonly name: string; readonly directory: string; readonly credential: string }
     | undefined;
   instructions: string | undefined;
+  /**
+   * The user's MCP servers this thread has registered, by name, with the
+   * config sent. They stay on the shared server when the thread unloads:
+   * another thread in the same directory may be using them.
+   */
+  readonly userMcp: Map<string, { readonly directory: string; readonly config: string }>;
 }
 
 type TurnTerminal =
@@ -471,12 +487,21 @@ export const t3McpServerName = Effect.fn("t3McpServerName")(function* (threadId:
  * this thread's own is allowed again, in every mode. A subagent's session
  * inherits the thread's.
  */
-const mcpRules = (mcpServerName: string | null): ReadonlyArray<Rule> =>
+const mcpRules = (
+  mcpServerName: string | null,
+  userServers: ReadonlyArray<McpProviderSession.UserMcpServer>,
+): ReadonlyArray<Rule> =>
   mcpServerName === null
     ? []
     : [
         { action: "t3-code-*", resource: "*", effect: "deny" },
         { action: `${mcpServerName}_*`, resource: "*", effect: "allow" },
+        // The user's servers are not T3's to allow: each tool asks, in every mode.
+        ...userServers.map((server): Rule => ({
+          action: `${server.name}_*`,
+          resource: "*",
+          effect: "ask",
+        })),
       ];
 
 const sessionRules = (
@@ -484,6 +509,7 @@ const sessionRules = (
   paths: ReadonlyArray<Rule>,
   grants: ReadonlyArray<Rule>,
   mcpServerName: string | null,
+  userServers: ReadonlyArray<McpProviderSession.UserMcpServer>,
 ): ReadonlyArray<Rule> => [
   ...(policy.runtimeMode === "full-access"
     ? [rule("*", "allow")]
@@ -497,7 +523,7 @@ const sessionRules = (
   // are never denied: the free tier refuses sessions whose rules deny them.
   ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
   ...paths,
-  ...mcpRules(mcpServerName),
+  ...mcpRules(mcpServerName, userServers),
 ];
 
 const sameRules = (left: ReadonlyArray<Rule> | undefined, right: ReadonlyArray<Rule>) =>
@@ -668,6 +694,7 @@ const LOST_BACKGROUND =
   "T3 Code lost its connection to OpenCode while this subagent ran, so its result is not shown.";
 /** How long a turn waits on the directory's commands or skills before sending the text as is. */
 const INVENTORY_TIMEOUT = "5 seconds";
+
 const ACTIVE_CHECK_TIMEOUT = "5 seconds";
 /** Answers that mean the server refused a prompt; any other failure may have been accepted. */
 const CLEAR_PROMPT_REJECTIONS: ReadonlySet<string> = new Set([
@@ -946,6 +973,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       strandedSteers: new Set(),
       mcp: undefined,
       instructions: undefined,
+      userMcp: new Map(),
     });
 
     /** The thread whose session started this one, through any nesting. */
@@ -1024,6 +1052,46 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         session = { ...session, status, lastError, updatedAt: yield* DateTime.now };
         yield* emit({ type: "provider_session.updated", driver, providerSession: session });
       });
+
+    // Session MCP status: the latest `mcp.list` answer for the directory the
+    // user's servers were last registered in, published as the session's list.
+    // `t3-code-<thread>` never appears: only configured user servers are named.
+    let mcpStatusConfig: McpProviderSession.McpProviderSessionConfig | undefined;
+    let mcpStatusDirectory: string | undefined;
+    let reportedMcp: ReadonlyArray<McpSessionServerStatus> = [];
+    let publishedMcp = "";
+    const publishMcpStatuses = Effect.gen(function* () {
+      const mcpServers = McpProviderSession.sessionMcpStatuses({
+        config: mcpStatusConfig,
+        transports: OpenCode2ProviderCapabilities.tools.userMcpTransports,
+        reported: reportedMcp,
+      });
+      if (mcpServers === undefined) return;
+      const key = JSON.stringify(mcpServers);
+      if (key === publishedMcp) return;
+      publishedMcp = key;
+      session = { ...session, mcpServers, updatedAt: yield* DateTime.now };
+      yield* emit({ type: "provider_session.updated", driver, providerSession: session });
+    });
+    /** Re-lists the servers' statuses after OpenCode says one changed. */
+    const refreshMcpStatuses = Effect.gen(function* () {
+      if (mcpStatusConfig?.userMcp === undefined || mcpStatusDirectory === undefined) return;
+      const listed = yield* client.mcp.list({ location: { directory: mcpStatusDirectory } }).pipe(
+        Effect.timeout(INVENTORY_TIMEOUT),
+        Effect.map((response) => response.data),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not list OpenCode's MCP servers.", cause).pipe(
+            Effect.as(undefined),
+          ),
+        ),
+      );
+      if (listed === undefined) return;
+      reportedMcp = listed.map((entry) => ({
+        name: entry.name,
+        ...openCodeMcpStatus(entry.status),
+      }));
+      yield* publishMcpStatuses;
+    });
 
     const ordinalOf = (turn: ActiveTurn, nativeId: string) => {
       const known = turn.ordinals.get(nativeId);
@@ -2446,6 +2514,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         : Effect.void;
 
     const handleEvent = Effect.fnUntraced(function* (event: OpenCode2Client.OpenCode2StreamEvent) {
+      if (event.type === "mcp.status.changed") return yield* refreshMcpStatuses;
       const sessionId = sessionOfEvent(event);
       // `revert.clear` wakes the session into an empty execution of its own
       // (2.0.18's `Session.revert.clear` ends with a wake). It is no run of
@@ -2846,7 +2915,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       currentScope = scope;
       yield* Scope.close(previous, Exit.void);
       // A restarted server forgot T3's MCP servers; the next turn adds them again.
-      for (const state of threads.values()) state.mcp = undefined;
+      for (const state of threads.values()) {
+        state.mcp = undefined;
+        state.userMcp.clear();
+      }
       yield* lock.withPermit(reconcile).pipe(Effect.timeout(RECONCILE_TIMEOUT));
       return stream;
     }).pipe(
@@ -2996,6 +3068,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         paths,
         policy.runtimeMode === "full-access" ? [] : thread.grants,
         appThreadId === null ? null : yield* mcpServerNameFor(appThreadId),
+        appThreadId === null
+          ? []
+          : openCodeUserMcpServers(
+              yield* mcpSessions.read(appThreadId as ThreadId),
+              connection.external,
+            ),
       );
     });
 
@@ -3294,6 +3372,54 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           );
         if (added) state.mcp = wanted;
       }
+      // The user's servers go on the shared server for this directory. A server
+      // the user removed is taken off; one already registered with the same
+      // config is left alone. A server that cannot be added still runs the turn.
+      const userServers =
+        mcpSession === undefined ? [] : openCodeUserMcpServers(mcpSession, connection.external);
+      for (const [userName, registered] of [...state.userMcp]) {
+        if (userServers.some((server) => server.name === userName)) continue;
+        yield* removeMcp({ name: userName, directory: registered.directory });
+        state.userMcp.delete(userName);
+      }
+      for (const server of userServers) {
+        const config = openCodeUserMcpConfig(server, mcpSession!.authorizationHeader);
+        const serialized = openCodeUserMcpConfigKey(config);
+        const registered = state.userMcp.get(server.name);
+        if (registered?.directory === directory && registered.config === serialized) continue;
+        const added = yield* client.mcp
+          .add({
+            server: server.name,
+            location: { directory },
+            config:
+              config.type === "local"
+                ? new Mcp.LocalConfig({
+                    type: "local",
+                    command: [...config.command],
+                    environment: { ...config.environment },
+                  })
+                : new Mcp.RemoteConfig({
+                    type: "remote",
+                    url: config.url,
+                    headers: { ...config.headers },
+                    oauth: false,
+                  }),
+          })
+          .pipe(
+            Effect.timeout(INVENTORY_TIMEOUT),
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not add a user MCP server to OpenCode.", {
+                server: server.name,
+                cause,
+              }).pipe(Effect.as(false)),
+            ),
+          );
+        if (added) state.userMcp.set(server.name, { directory, config: serialized });
+      }
+      mcpStatusConfig = mcpSession;
+      mcpStatusDirectory = directory;
+      yield* publishMcpStatuses;
       const instructions = [
         buildRuntimeInstructions({ harness: "OpenCode", model: turnInput.modelSelection.model }),
         t3OrchestrationSystemPrompt(state.mcp !== undefined),

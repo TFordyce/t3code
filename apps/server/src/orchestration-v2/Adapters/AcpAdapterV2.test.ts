@@ -86,7 +86,8 @@ import {
   type AcpAdapterV2SubagentUpdate,
 } from "@t3tools/provider-acp/server/adapter";
 
-import { makeGrokAdapterV2 } from "@t3tools/provider-grok/testing";
+import { GrokProviderCapabilitiesV2, makeGrokAdapterV2 } from "@t3tools/provider-grok/testing";
+import { AntigravityProviderCapabilitiesV2 } from "./AntigravityAdapterV2.ts";
 import {
   acpRegistryPromptFailure,
   registerMistralVibeAcpExtensions,
@@ -760,6 +761,125 @@ describe("AcpAdapterV2", () => {
       assert.equal(runtimeInput?.processEnvironment?.T3_ACP_MCP_ENTRYPOINT, undefined);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
+
+  it.effect(
+    "hands user MCP servers to ACP agents in both lists, carrying http through the bridge",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const path = yield* Path.Path;
+        const selfInvocation = yield* resolveSelfInvocation().pipe(
+          Effect.provideService(HostProcess.IsExecutable, true),
+        );
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+
+        const open = Effect.fnUntraced(function* (
+          name: string,
+          capabilities: typeof AcpProviderCapabilitiesV2,
+        ) {
+          const instanceId = ProviderInstanceId.make(`acp-test-user-mcp-${name}`);
+          const threadId = ThreadId.make(`thread-acp-user-mcp-${name}`);
+          yield* (yield* McpProviderSessions.McpProviderSessions).set({
+            environmentId: EnvironmentId.make(`environment-acp-user-mcp-${name}`),
+            threadId,
+            providerSessionId: `mcp-session-acp-user-mcp-${name}`,
+            providerInstanceId: instanceId,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer user-mcp-token",
+            browserToolsAvailable: false,
+            userMcp: {
+              servers: [
+                {
+                  name: "files",
+                  transport: "stdio",
+                  command: "npx",
+                  args: ["-y", "files"],
+                  env: { K: "v" },
+                },
+                {
+                  name: "docs",
+                  transport: "http",
+                  url: "http://127.0.0.1:43123/mcp-proxy/docs",
+                  upstreamUrlFingerprint: "fp",
+                },
+              ],
+              skipped: [],
+            },
+          });
+          let runtimeInput: AcpAdapterV2RuntimeInput | undefined;
+          const makeRuntime = makeMockRuntime({ childProcessSpawner, mockAgentPath });
+          const adapter = yield* makeAcpAdapterV2({
+            instanceId,
+            flavor: {
+              driver: ACP_TEST_DRIVER,
+              capabilities,
+              makeRuntime: (input) =>
+                Effect.sync(() => {
+                  runtimeInput = input;
+                }).pipe(Effect.andThen(makeRuntime(input))),
+            },
+            selfInvocation,
+          });
+          yield* adapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make(`provider-session-acp-user-mcp-${name}`),
+            modelSelection: { instanceId, model: "default" },
+            runtimePolicy,
+          });
+          return runtimeInput;
+        });
+
+        const generic = yield* open("generic", AcpProviderCapabilitiesV2);
+        for (const list of [generic?.mcpServers, generic?.acpMcpServers]) {
+          const names = (list ?? []).map((server) => server.name);
+          assert.deepEqual(names, ["t3-code", "files", "docs"]);
+        }
+        const files = generic?.mcpServers.find((server) => server.name === "files");
+        assert.deepEqual(files, {
+          name: "files",
+          command: "npx",
+          args: ["-y", "files"],
+          env: [{ name: "K", value: "v" }],
+        });
+        const docs = generic?.mcpServers.find((server) => server.name === "docs");
+        if (docs === undefined || !("command" in docs)) {
+          return yield* Effect.die(
+            "http user server must reach the agent through the stdio bridge",
+          );
+        }
+        assert.deepEqual(docs.args, ["acp-mcp-bridge"]);
+        assert.deepInclude(docs.env, {
+          name: "T3_ACP_MCP_ENDPOINT",
+          value: "http://127.0.0.1:43123/mcp-proxy/docs",
+        });
+        assert.deepInclude(docs.env, {
+          name: "T3_ACP_MCP_AUTHORIZATION",
+          value: "Bearer user-mcp-token",
+        });
+
+        const optedOut = yield* open("opted-out", {
+          ...AcpProviderCapabilitiesV2,
+          tools: { ...AcpProviderCapabilitiesV2.tools, userMcpTransports: [] },
+        });
+        assert.deepEqual(
+          optedOut?.mcpServers.map((server) => server.name),
+          ["t3-code"],
+        );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it("declares no user MCP transports for Grok and Antigravity, which cannot carry them", () => {
+    assert.deepEqual(AcpProviderCapabilitiesV2.tools.userMcpTransports, ["stdio", "http"]);
+    assert.deepEqual(GrokProviderCapabilitiesV2.tools.userMcpTransports, []);
+    assert.deepEqual(AntigravityProviderCapabilitiesV2.tools.userMcpTransports, []);
+  });
 
   it.live("refreshes ACP prompt instructions when the interaction mode changes", () =>
     Effect.gen(function* () {

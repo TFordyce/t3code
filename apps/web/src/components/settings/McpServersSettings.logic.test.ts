@@ -15,6 +15,7 @@ import {
   projectMcpPatch,
   projectMcpRows,
   providersWithoutMcpSupport,
+  saveNotice,
   selectProjectMcpCheck,
   urlQueryTokenWarning,
   validateDraft,
@@ -220,6 +221,33 @@ describe("providersWithoutMcpSupport", () => {
   it("does not blame providers whose support is unknown or that are disabled", () => {
     expect(providersWithoutMcpSupport([provider("a"), provider("b", [], false)], "stdio")).toEqual(
       [],
+    );
+  });
+});
+
+describe("saveNotice", () => {
+  const provider = (driver: string, enabled = true) =>
+    ({
+      instanceId: ProviderInstanceId.make(driver),
+      driver: ProviderDriverKind.make(driver),
+      enabled,
+    }) as unknown as ServerProvider;
+
+  it("says only new sessions are affected when no OpenCode provider is enabled", () => {
+    expect(saveNotice([provider("codex"), provider("opencode", false)])).toBe(
+      "Applies to new sessions.",
+    );
+  });
+
+  it("scopes the notice to the project on a project page", () => {
+    expect(saveNotice([provider("opencode")], "project")).toBe(
+      "Applies to new sessions in this project. OpenCode sessions in this project pick it up now.",
+    );
+  });
+
+  it("adds the OpenCode caveat, because its shared server applies changes to running sessions", () => {
+    expect(saveNotice([provider("codex"), provider("opencode")])).toBe(
+      "Applies to new sessions. OpenCode sessions pick it up now.",
     );
   });
 });

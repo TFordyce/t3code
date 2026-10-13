@@ -15,6 +15,8 @@ export const PI_T3_MCP_EXTENSION_FILENAME = "pi-t3-mcp-extension.ts";
 export const T3_MCP_URL_ENV = "T3_MCP_URL";
 export const T3_MCP_BEARER_ENV = "T3_MCP_BEARER_TOKEN";
 export const T3_PI_RUNTIME_MODE_ENV = "T3_PI_RUNTIME_MODE";
+/** JSON list of the user's MCP servers for the extension to register; absent when there are none. */
+export const T3_PI_USER_MCP_ENV = "T3_PI_USER_MCP_SERVERS";
 
 /**
  * Pi tools whose confirmations the bridge raises as file-change approvals.
@@ -31,6 +33,7 @@ import { Type } from "typebox";
 const URL_ENV = ${JSON.stringify(T3_MCP_URL_ENV)};
 const TOKEN_ENV = ${JSON.stringify(T3_MCP_BEARER_ENV)};
 const RUNTIME_MODE_ENV = ${JSON.stringify(T3_PI_RUNTIME_MODE_ENV)};
+const USER_MCP_ENV = ${JSON.stringify(T3_PI_USER_MCP_ENV)};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim())};
 const PROTOCOL = "2025-06-18";
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -310,6 +313,36 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   const directTools = new Set(["orchestrator_capabilities", "delegate_task", "task_status"]);
   let deferOptionalTools = supportsExposure;
   let catalog: ReadonlyArray<McpTool> = [];
+
+  // The user's own servers. Pi owns their connections once registered; http
+  // servers are T3 loopback proxy addresses, reached with the session bearer.
+  // A Pi without registerMcpServer is never handed any (the adapter declares
+  // no transports for it), so there is nothing to do there.
+  if (supportsExposure) {
+    try {
+      const raw = env(USER_MCP_ENV);
+      const servers = (raw === undefined ? [] : JSON.parse(raw)) as ReadonlyArray<
+        | { name: string; transport: "stdio"; command: string; args: string[]; env: Record<string, string> }
+        | { name: string; transport: "http"; url: string }
+      >;
+      for (const server of servers) {
+        pi.registerMcpServer(
+          server.name,
+          server.transport === "stdio"
+            ? { command: server.command, args: server.args, env: server.env }
+            : {
+                url: server.url,
+                headers: { authorization: token.startsWith("Bearer ") ? token : \`Bearer \${token}\` },
+              },
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      pi.on("session_start", async (_event, ctx) => {
+        ctx.ui.notify(\`User MCP servers unavailable: \${message}\`, "warning");
+      });
+    }
+  }
 
   const client = createMcpClient(endpoint, token);
   let started: Promise<void> | undefined;

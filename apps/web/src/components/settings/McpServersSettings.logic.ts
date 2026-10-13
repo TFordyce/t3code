@@ -241,6 +241,21 @@ export function providersWithoutMcpSupport(
   return [...new Set(names)];
 }
 
+/**
+ * The notice shown after a save. OpenCode registers servers on one shared
+ * server per directory, so its running sessions pick a change up too.
+ */
+export function saveNotice(
+  providers: ReadonlyArray<ServerProvider>,
+  scope: "environment" | "project" = "environment",
+): string {
+  const where = scope === "project" ? " in this project" : "";
+  const base = `Applies to new sessions${where}.`;
+  return providers.some((provider) => provider.enabled && provider.driver === "opencode")
+    ? `${base} OpenCode sessions${where} pick it up now.`
+    : base;
+}
+
 /** One row in a project's own section: its servers and its overrides of environment ones. */
 export interface ProjectMcpRow {
   readonly name: string;
