@@ -1,6 +1,5 @@
 import {
   BUILT_IN_MCP_SERVER_NAME,
-  isMcpServerDisabledMarker,
   MCP_HEADER_NAME_PATTERN,
   MCP_SERVER_NAME_PATTERN,
   ProviderInstanceEnvironmentVariableName,
@@ -256,61 +255,11 @@ export function saveNotice(
     : base;
 }
 
-/** One row in a project's own section: its servers and its overrides of environment ones. */
-export interface ProjectMcpRow {
-  readonly name: string;
-  readonly config: McpServerConfig;
-  readonly kind: "project" | "override";
-}
-
-/** An environment server as a project sees it. */
-export interface InheritedMcpRow {
-  readonly name: string;
-  readonly config: McpServerConfig;
-  /** The project has a marker turning it off. */
-  readonly offForProject: boolean;
-  /** Off at environment level, so the project switch is inert. */
-  readonly offOnEnvironment: boolean;
-}
-
-type McpSettingsView = Pick<ServerSettings, "mcpServers" | "projectSettingsOverrides">;
-
-/**
- * The rows of a project's MCP page: what the project holds itself ("This
- * project") and the environment servers it inherits, in name order.
- */
-export function projectMcpRows(
-  settings: McpSettingsView,
-  projectId: ProjectId,
-): {
-  readonly project: ReadonlyArray<ProjectMcpRow>;
-  readonly inherited: ReadonlyArray<InheritedMcpRow>;
-} {
-  const overrides = settings.projectSettingsOverrides[projectId]?.mcpServers ?? {};
-  const project: ProjectMcpRow[] = [];
-  const inherited: InheritedMcpRow[] = [];
-  for (const [name, override] of Object.entries(overrides)) {
-    if (isMcpServerDisabledMarker(override)) continue;
-    project.push({
-      name,
-      config: override,
-      kind: Object.hasOwn(settings.mcpServers, name) ? "override" : "project",
-    });
-  }
-  for (const [name, config] of Object.entries(settings.mcpServers)) {
-    const override = overrides[name];
-    if (override !== undefined && !isMcpServerDisabledMarker(override)) continue;
-    inherited.push({
-      name,
-      config,
-      offForProject: override !== undefined,
-      offOnEnvironment: config.enabled === false,
-    });
-  }
-  const byName = (left: { readonly name: string }, right: { readonly name: string }) =>
-    left.name.localeCompare(right.name);
-  return { project: project.toSorted(byName), inherited: inherited.toSorted(byName) };
-}
+export {
+  projectMcpRows,
+  type InheritedMcpRow,
+  type ProjectMcpRow,
+} from "@t3tools/client-runtime/state/mcp-server-checks";
 
 /**
  * The patch that sets one project entry (`null` removes it). A project patch
