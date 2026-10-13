@@ -53,6 +53,8 @@ export interface ThreadDetailsPanelProps extends Pick<
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest: () => void;
   onOpenChanges?: () => void;
+  /** Opens the Agents right-panel surface, where the full lineage lives. */
+  onOpenAgents?: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
   onUpdateProjectScript: (
@@ -180,6 +182,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             <ThreadRelationshipsPanel
               environmentId={props.environmentId}
               threadId={props.threadId}
+              {...(props.onOpenAgents ? { onOpenAgents: props.onOpenAgents } : {})}
             />
           ) : null}
         </>

@@ -51,6 +51,35 @@ describe("rightPanelStore", () => {
     ).toEqual(["device", "diff", pr.id]);
   });
 
+  it("opens Agents as a singleton and reopens it after closing", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "agents");
+    store.open(refA, "agents");
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "agents",
+      surfaces: [{ id: "agents", kind: "agents" }],
+    });
+
+    store.closeSurface(refA, "agents");
+    expect(useClosedViewStore.getState().entries[0]).toMatchObject({
+      kind: "panel-tab",
+      surface: { id: "agents", kind: "agents" },
+    });
+  });
+
+  it("keeps a persisted Agents surface through migration", () => {
+    const panelState = {
+      isOpen: true,
+      activeSurfaceId: "agents",
+      surfaces: [{ id: "agents", kind: "agents" }],
+    };
+    expect(
+      migratePersistedRightPanelState({ byThreadKey: { "env-1:thread-A": panelState } })
+        .byThreadKey,
+    ).toEqual({ "env-1:thread-A": panelState });
+  });
+
   it("reopens the active tab first after a bulk close", () => {
     const store = useRightPanelStore.getState();
     store.open(refA, "files");
@@ -485,45 +514,44 @@ describe("rightPanelStore", () => {
     });
   });
 
-  it.each([
-    { kind: "plan", isOpen: true },
-    { kind: "agents", isOpen: true },
-    { kind: "agents", isOpen: false },
-  ])("drops $kind with isOpen=$isOpen and falls back", ({ kind, isOpen }) => {
-    expect(
-      migratePersistedRightPanelState({
+  it.each([{ kind: "plan", isOpen: true }])(
+    "drops $kind with isOpen=$isOpen and falls back",
+    ({ kind, isOpen }) => {
+      expect(
+        migratePersistedRightPanelState({
+          byThreadKey: {
+            "env-1:thread-A": {
+              isOpen,
+              activeSurfaceId: kind,
+              surfaces: [{ id: kind, kind }],
+            },
+            "env-1:thread-B": {
+              isOpen,
+              activeSurfaceId: kind,
+              surfaces: [
+                { id: kind, kind },
+                { id: "diff", kind: "diff" },
+              ],
+            },
+          },
+        }),
+      ).toEqual({
         byThreadKey: {
           "env-1:thread-A": {
-            isOpen,
-            activeSurfaceId: kind,
-            surfaces: [{ id: kind, kind }],
+            isOpen: false,
+            activeSurfaceId: null,
+            surfaces: [],
           },
           "env-1:thread-B": {
             isOpen,
-            activeSurfaceId: kind,
-            surfaces: [
-              { id: kind, kind },
-              { id: "diff", kind: "diff" },
-            ],
+            activeSurfaceId: "diff",
+            surfaces: [{ id: "diff", kind: "diff" }],
           },
         },
-      }),
-    ).toEqual({
-      byThreadKey: {
-        "env-1:thread-A": {
-          isOpen: false,
-          activeSurfaceId: null,
-          surfaces: [],
-        },
-        "env-1:thread-B": {
-          isOpen,
-          activeSurfaceId: "diff",
-          surfaces: [{ id: "diff", kind: "diff" }],
-        },
-      },
-      threadPanelVisibilityByThreadKey: {},
-    });
-  });
+        threadPanelVisibilityByThreadKey: {},
+      });
+    },
+  );
 
   it("persists inline preference without restoring an open popover", () => {
     expect(

@@ -205,9 +205,16 @@ function currentSubagent<Agent extends RuntimeSubagent>(
   };
 }
 
+/**
+ * The thread's subagents and forks. In the details card it disappears when there
+ * are none; the Agents surface passes `empty` so its tab explains itself instead.
+ */
 export function ThreadRelationshipsPanel(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly empty?: ReactNode;
+  /** Adds an "Open" link to the heading that moves the list into the Agents surface. */
+  readonly onOpenAgents?: () => void;
 }) {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
   const projection = useThreadProjection(ref)?.projection ?? null;
@@ -293,7 +300,7 @@ export function ThreadRelationshipsPanel(props: {
     ).length ?? 0) + active.filter(({ edge }) => edge.status === "running").length;
 
   if (relationshipRows.length === 0 && runningCount === 0) {
-    return null;
+    return props.empty ?? null;
   }
 
   const openThread = (threadId: ThreadId) => {
@@ -352,29 +359,41 @@ export function ThreadRelationshipsPanel(props: {
       title={runningCount > 0 ? `Lineage · ${runningCount} running` : "Lineage"}
       data-thread-relationships-panel
       actions={
-        canDetach ? (
-          <Menu>
-            <MenuTrigger
-              render={
-                <ThreadDetailsControl
-                  size="icon-xs"
-                  variant="ghost"
-                  part="icon"
-                  aria-label="More thread actions"
-                  disabled={busyAction !== null}
-                />
-              }
+        <>
+          {props.onOpenAgents ? (
+            <ThreadDetailsControl
+              size="xs"
+              variant="ghost"
+              part="meta"
+              onClick={props.onOpenAgents}
             >
-              <MoreHorizontalIcon className="size-3.5" />
-            </MenuTrigger>
-            <MenuPopup align="end" className="min-w-60 max-w-(--available-width)">
-              <MenuItem onClick={() => void detach()}>
-                <UnplugIcon className="size-3.5" />
-                Disconnect agent session
-              </MenuItem>
-            </MenuPopup>
-          </Menu>
-        ) : null
+              Open
+            </ThreadDetailsControl>
+          ) : null}
+          {canDetach ? (
+            <Menu>
+              <MenuTrigger
+                render={
+                  <ThreadDetailsControl
+                    size="icon-xs"
+                    variant="ghost"
+                    part="icon"
+                    aria-label="More thread actions"
+                    disabled={busyAction !== null}
+                  />
+                }
+              >
+                <MoreHorizontalIcon className="size-3.5" />
+              </MenuTrigger>
+              <MenuPopup align="end" className="min-w-60 max-w-(--available-width)">
+                <MenuItem onClick={() => void detach()}>
+                  <UnplugIcon className="size-3.5" />
+                  Disconnect agent session
+                </MenuItem>
+              </MenuPopup>
+            </Menu>
+          ) : null}
+        </>
       }
     >
       {groups.map((group) => (
