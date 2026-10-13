@@ -2420,9 +2420,10 @@ const layerWsRpc = (
               canManageProviders: currentSession.scopes.includes(AuthProvidersManageScope),
             }).pipe(
               Effect.provideService(ServerSettings.ServerSettingsService, serverSettings),
-              Effect.catchTag("ProvidersManageRequiredError", () =>
-                Effect.fail(rpcAuthorizationError(AuthProvidersManageScope)),
-              ),
+              Effect.catchTags({
+                ProvidersManageRequiredError: () =>
+                  Effect.fail(rpcAuthorizationError(AuthProvidersManageScope)),
+              }),
             );
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,

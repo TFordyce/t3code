@@ -4,7 +4,7 @@
  * bearer the authorization server issued, everything else is the OAuth side.
  */
 import * as NodeHttp from "node:http";
-import type { AddressInfo } from "node:net";
+import type * as NodeNet from "node:net";
 
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -178,7 +178,7 @@ export const startFakeOAuthWorld = Effect.acquireRelease(
             })();
           });
           server.listen(0, "127.0.0.1", () => {
-            const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+            const origin = `http://127.0.0.1:${(server.address() as NodeNet.AddressInfo).port}`;
             (world as { origin: string }).origin = origin;
             (world as { mcpUrl: string }).mcpUrl = `${origin}/mcp`;
             resolve({ server, world });

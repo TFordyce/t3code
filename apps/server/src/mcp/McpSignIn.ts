@@ -14,7 +14,7 @@
  * @module McpSignIn
  */
 import * as NodeHttp from "node:http";
-import type { AddressInfo } from "node:net";
+import type * as NodeNet from "node:net";
 
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
@@ -42,7 +42,7 @@ import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { randomBytes } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -169,7 +169,7 @@ const providerFor = (session: Session): OAuthClientProvider => ({
 
 const newSession = (redirectUrl: string): Session => ({
   redirectUrl,
-  state: randomBytes(24).toString("base64url"),
+  state: NodeCrypto.randomBytes(24).toString("base64url"),
   clientInformation: undefined,
   tokens: undefined,
   codeVerifier: "",
@@ -498,7 +498,7 @@ const make = Effect.gen(function* () {
                 response.writeHead(404).end();
                 return;
               }
-              const address = server.address() as AddressInfo;
+              const address = server.address() as NodeNet.AddressInfo;
               void Effect.runPromise(
                 completeFlow(target, `http://127.0.0.1:${address.port}${request.url}`).pipe(
                   Effect.result,
@@ -545,7 +545,7 @@ const make = Effect.gen(function* () {
     const close = Scope.close(flowScope, Exit.void);
     const outcome = yield* Effect.gen(function* () {
       const server = yield* listenForRedirect(target).pipe(Scope.provide(flowScope));
-      const redirectUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/callback`;
+      const redirectUrl = `http://127.0.0.1:${(server.address() as NodeNet.AddressInfo).port}/callback`;
       const session = newSession(redirectUrl);
       const oauth = config.oauth;
       if (oauth !== undefined) {

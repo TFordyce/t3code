@@ -1,5 +1,5 @@
 import * as NodeHttp from "node:http";
-import type { AddressInfo } from "node:net";
+import type * as NodeNet from "node:net";
 
 import { NodeHttpServer } from "@effect/platform-node";
 import { assert, it } from "@effect/vitest";
@@ -85,7 +85,7 @@ const startFakeMcpServer = Effect.acquireRelease(
 );
 
 const upstreamUrl = (server: NodeHttp.Server, path: string) =>
-  `http://127.0.0.1:${(server.address() as AddressInfo).port}${path}`;
+  `http://127.0.0.1:${(server.address() as NodeNet.AddressInfo).port}${path}`;
 
 const sessionScope: McpInvocationContext.McpThreadInvocationScope = {
   environmentId,

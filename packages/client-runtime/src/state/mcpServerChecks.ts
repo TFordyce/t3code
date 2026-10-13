@@ -113,7 +113,7 @@ export function projectMcpRows(
       offOnEnvironment: config.enabled === false,
     });
   }
-  return { project: project.toSorted(byName), inherited: inherited.toSorted(byName) };
+  return { project: project.slice().sort(byName), inherited: inherited.slice().sort(byName) };
 }
 
 export type McpRowTone = "neutral" | "success" | "warning" | "error";
@@ -199,7 +199,8 @@ export function mcpServerListRows(input: {
   if (input.projectId === null) {
     return Object.entries(input.settings.mcpServers)
       .map(([name, config]) => row(name, config, "environment", offOwn(config)))
-      .toSorted(byName);
+      .slice()
+      .sort(byName);
   }
   const { project, inherited } = projectMcpRows(input.settings, input.projectId);
   return [
@@ -257,7 +258,7 @@ export function threadMcpRows(input: {
       };
     });
   }
-  return input.configuredNames.toSorted().map((name): ThreadMcpRow => {
+  return [...input.configuredNames].sort().map((name): ThreadMcpRow => {
     const check = input.serverCheckFor?.(name);
     if (check === undefined) return { name, status: "unknown" };
     const detail = check.error ?? toolCountDetail(check.toolCount);
