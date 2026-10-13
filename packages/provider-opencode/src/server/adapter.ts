@@ -719,7 +719,7 @@ export function openCodePermissionRules(
  * are not T3's to allow. Every tool of a server asks, in every runtime mode:
  * the rule comes last and the last matching rule wins.
  */
-export function openCodeUserMcpRules(
+function openCodeUserMcpRules(
   servers: ReadonlyArray<McpProviderSession.UserMcpServer>,
 ): PermissionRuleset {
   return servers.map((server) => ({
