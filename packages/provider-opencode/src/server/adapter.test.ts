@@ -2416,6 +2416,82 @@ describe("OpenCodeAdapterV2", () => {
       ),
   );
 
+  it.effect("re-lists MCP status on a change event and publishes it without t3-code", () =>
+    Effect.gen(function* () {
+      const nativeSessionId = "native-opencode-mcp-session-status";
+      const nativeEvents = asyncEventStream();
+      const client = {
+        event: {
+          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+            options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
+            return { stream: nativeEvents.stream };
+          },
+        },
+        session: {
+          create: async () => ({ data: { id: nativeSessionId, time: { created: 1, updated: 1 } } }),
+        },
+        mcp: {
+          add: async () => ({ data: true }),
+          status: async () => ({
+            data: {
+              "t3-code": { status: "connected" },
+              files: { status: "pending" },
+              docs: { status: "needs_auth" },
+            },
+          }),
+        },
+      };
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        "mcp-session-status",
+        nativeSessionId,
+        client,
+        {
+          external: false,
+          userMcp: {
+            servers: [
+              { name: "files", transport: "stdio", command: "files", args: [], env: {} },
+              {
+                name: "docs",
+                transport: "http",
+                url: "http://127.0.0.1:43123/mcp-proxy/docs",
+                upstreamUrlFingerprint: "fp",
+              },
+            ],
+            skipped: [{ name: "vault", reason: "secret-unavailable" }],
+          },
+        },
+      );
+      const lists = yield* harness.runtime.events.pipe(
+        Stream.flatMap((event) =>
+          event.type === "provider_session.updated" &&
+          event.providerSession.mcpServers !== undefined
+            ? Stream.make(event.providerSession.mcpServers)
+            : Stream.empty,
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* Effect.promise(() =>
+        nativeEvents.push({ type: "mcp.status.changed", properties: { server: "docs" } }),
+      );
+      const received = yield* Fiber.join(lists);
+      assert.deepEqual(received[0], [
+        { name: "files", status: "unknown" },
+        { name: "docs", status: "unknown" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
+      ]);
+      assert.deepEqual(received[1], [
+        { name: "files", status: "connecting" },
+        { name: "docs", status: "needs-auth" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
+      ]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
   it.effect("does not let a queued status retry adopt a newer steer generation", () =>
     Effect.gen(function* () {
       const nativeSessionId = "native-opencode-stale-status-retry";

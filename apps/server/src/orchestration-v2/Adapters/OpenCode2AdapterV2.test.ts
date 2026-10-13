@@ -2830,6 +2830,110 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       }).pipe(Effect.scoped),
   );
 
+  it.effect(
+    "re-lists MCP servers on a status change and publishes the mapped list without t3-code",
+    () =>
+      Effect.gen(function* () {
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId,
+          providerSessionId: "mcp:opencode2-adapter",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          authorizationHeader: "Bearer thread-credential",
+          browserToolsAvailable: false,
+          userMcp: {
+            servers: [
+              {
+                name: "files",
+                transport: "stdio",
+                command: "npx",
+                args: ["-y", "files"],
+                env: {},
+              },
+              {
+                name: "docs",
+                transport: "http",
+                url: "http://127.0.0.1:3773/mcp-proxy/docs",
+                upstreamUrlFingerprint: "fp",
+              },
+            ],
+            skipped: [{ name: "vault", reason: "secret-unavailable" }],
+          },
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadId));
+        const server = "t3-code-thread_opencode2-adapter";
+        const { runtime, thread } = yield* resumed([
+          out("session.update", {
+            sessionID: SESSION,
+            permissions: [
+              ...t3Rules,
+              { action: "files_*", resource: "*", effect: "ask" },
+              { action: "docs_*", resource: "*", effect: "ask" },
+            ],
+          }),
+          reply("session.update", null),
+          out("mcp.add", "<any>"),
+          reply("mcp.add", null),
+          out("mcp.add", "<any>"),
+          reply("mcp.add", null),
+          out("mcp.add", "<any>"),
+          reply("mcp.add", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          {
+            type: "emit_inbound",
+            frame: {
+              type: "sdk.event",
+              event: {
+                id: "evt_mcpstatuschanged0000",
+                created: 1,
+                type: "mcp.status.changed",
+                data: { server: "docs" },
+              },
+            },
+          },
+          out("mcp.list", { "location[directory]": WORK }),
+          reply("mcp.list", {
+            location: { directory: WORK },
+            data: [
+              { name: server, status: { status: "connected" } },
+              { name: "files", status: { status: "pending" } },
+              { name: "docs", status: { status: "needs_auth", error: "sign in" } },
+            ],
+          }),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          out("mcp.remove", { server, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+        ]);
+        const updates = yield* runtime.events.pipe(
+          Stream.takeUntil((item) => item.type === "turn.terminal"),
+          Stream.flatMap((item) =>
+            item.type === "provider_session.updated" &&
+            item.providerSession.mcpServers !== undefined
+              ? Stream.make(item.providerSession.mcpServers)
+              : Stream.empty,
+          ),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* runtime.startTurn(turnInput(thread));
+        const lists = yield* Fiber.join(updates);
+        assert.deepEqual(lists.at(0), [
+          { name: "files", status: "unknown" },
+          { name: "docs", status: "unknown" },
+          { name: "vault", status: "failed", error: "secret unavailable" },
+        ]);
+        assert.deepEqual(lists.at(-1), [
+          { name: "files", status: "connecting" },
+          { name: "docs", status: "needs-auth" },
+          { name: "vault", status: "failed", error: "secret unavailable" },
+        ]);
+        yield* runtime.unloadThread!({ providerThread: thread });
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("registers a long thread id's MCP server under a name OpenCode accepts", () =>
     Effect.gen(function* () {
       // Spelled out, this delegated thread's server name would be 120 characters.

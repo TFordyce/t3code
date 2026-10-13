@@ -57,6 +57,7 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2ProviderTurnTokenUsage,
+  type McpSessionServerStatus,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2UserInputQuestion,
   type OrchestrationV2Subagent,
@@ -343,6 +344,12 @@ export interface ClaudeAgentSdkQuerySession {
   ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly interrupt: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly close: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  // What the CLI reports about each configured MCP server; optional so query
+  // fakes can leave it out.
+  readonly mcpServerStatus?: Effect.Effect<
+    ReadonlyArray<ClaudeMcpServerStatus>,
+    ClaudeAgentSdkQueryRunnerError
+  >;
   // The /context categories; optional so query fakes can leave it out.
   readonly getContextUsage?: Effect.Effect<
     { readonly categories: ReadonlyArray<ClaudeContextUsageCategory> },
@@ -350,8 +357,40 @@ export interface ClaudeAgentSdkQuerySession {
   >;
 }
 
+export interface ClaudeMcpServerStatus {
+  readonly name: string;
+  readonly status: "connected" | "failed" | "needs-auth" | "pending" | "disabled";
+  readonly error?: string;
+  readonly tools?: ReadonlyArray<unknown>;
+}
+
+/** The CLI's status for one MCP server, as session MCP status. */
+function claudeMcpSessionStatus(server: ClaudeMcpServerStatus): McpSessionServerStatus {
+  switch (server.status) {
+    case "pending":
+      return { name: server.name, status: "connecting" };
+    case "connected":
+      return {
+        name: server.name,
+        status: "connected",
+        ...(server.tools === undefined ? {} : { toolCount: server.tools.length }),
+      };
+    case "needs-auth":
+      return { name: server.name, status: "needs-auth" };
+    case "disabled":
+      return { name: server.name, status: "disabled" };
+    case "failed":
+      return {
+        name: server.name,
+        status: "failed",
+        ...(server.error === undefined ? {} : { error: server.error }),
+      };
+  }
+}
+
 // Summary reports are local estimates; this only bounds a hung CLI.
 const CLAUDE_CONTEXT_BREAKDOWN_TIMEOUT = "1500 millis";
+const CLAUDE_MCP_STATUS_TIMEOUT = "5 seconds";
 
 type ClaudeContextUsageCategory = Pick<
   SDKControlGetContextUsageResponse["categories"][number],
@@ -766,6 +805,10 @@ export const layerQueryRunner: Layer.Layer<
                 }),
               ),
             ),
+          mcpServerStatus: Effect.tryPromise({
+            try: () => queryRuntime.mcpServerStatus(),
+            catch: (cause) => queryRunnerError(cause, "mcpServerStatus"),
+          }),
           // Summary detail answers from local estimates, with no token-count API calls.
           getContextUsage: Effect.tryPromise({
             try: () => queryRuntime.getContextUsage({ detail: "summary" }),
@@ -3439,6 +3482,41 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
+
+        // Session MCP status: the CLI's report on the user's servers, asked for
+        // after init and after each turn, published as the session's whole list.
+        // `t3-code` never appears: only configured user servers are named.
+        let mcpStatusConfig: McpProviderSession.McpProviderSessionConfig | undefined;
+        let publishedMcpStatuses = "";
+        const publishMcpStatuses = Effect.fnUntraced(function* (query: ClaudeAgentSdkQuerySession) {
+          if (mcpStatusConfig?.userMcp === undefined) return;
+          const reported =
+            query.mcpServerStatus === undefined
+              ? []
+              : yield* query.mcpServerStatus.pipe(
+                  Effect.timeout(CLAUDE_MCP_STATUS_TIMEOUT),
+                  Effect.map((servers) => servers.map(claudeMcpSessionStatus)),
+                  Effect.catch((error) =>
+                    Effect.logWarning("orchestration-v2.claude-mcp-status-unavailable", {
+                      error,
+                    }).pipe(Effect.as([])),
+                  ),
+                );
+          const mcpServers = McpProviderSession.sessionMcpStatuses({
+            config: mcpStatusConfig,
+            transports: ClaudeProviderCapabilitiesV2.tools.userMcpTransports,
+            reported,
+          });
+          if (mcpServers === undefined) return;
+          const key = JSON.stringify(mcpServers);
+          if (key === publishedMcpStatuses) return;
+          publishedMcpStatuses = key;
+          yield* emitProviderEvent({
+            type: "provider_session.updated",
+            driver: CLAUDE_PROVIDER,
+            providerSession: { ...session, mcpServers, updatedAt: yield* DateTime.now },
+          });
+        });
 
         // Claude emits retry progress but no recovered frame; the next
         // assistant message is the first reliable evidence of recovery.
@@ -6834,6 +6912,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ...(terminalFailure === null ? {} : { failure: terminalFailure }),
               ...(tokenUsage === undefined ? {} : { tokenUsage }),
             });
+            yield* publishMcpStatuses(input.query).pipe(Effect.forkIn(sessionScope));
           }
         });
 
@@ -7405,8 +7484,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           nativeThreadId: string,
         ) {
           const queryPolicy = claudeRuntimeQueryPolicyForRuntimePolicy(turnInput.runtimePolicy);
+          const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+          mcpStatusConfig = mcpSession;
           const mcpOverrides = claudeMcpQueryOverrides({
-            mcpSession: yield* mcpSessions.read(turnInput.threadId),
+            mcpSession,
             readOnlySandbox:
               sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
             ...(queryPolicy.allowedTools === undefined
@@ -7578,6 +7659,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 message.permissionMode !== undefined
               ) {
                 context.permissionMode = message.permissionMode;
+              }
+              if (message.type === "system" && message.subtype === "init") {
+                // Forked: the report waits on the CLI, which this stream drains.
+                return handleSdkMessage({ query: querySession, message }).pipe(
+                  Effect.tap(() =>
+                    publishMcpStatuses(querySession).pipe(Effect.forkIn(sessionScope)),
+                  ),
+                );
               }
               return handleSdkMessage({ query: querySession, message });
             }),
