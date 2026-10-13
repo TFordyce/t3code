@@ -516,14 +516,17 @@ it.effect("deleting a project removes its MCP overrides and keeps its other sett
       assert.deepEqual(overrides[projectId], { defaultAutoPull: true });
       assert.deepEqual(overrides[otherId]?.mcpServers, { gh });
     }).pipe(
-      Effect.provide(layerServices),
       Effect.provide(
-        ServerSettings.layerTest({
-          projectSettingsOverrides: {
-            [projectId]: { defaultAutoPull: true, mcpServers: { gh } },
-            [otherId]: { mcpServers: { gh } },
-          },
-        }),
+        layerServices.pipe(
+          Layer.provideMerge(
+            ServerSettings.layerTest({
+              projectSettingsOverrides: {
+                [projectId]: { defaultAutoPull: true, mcpServers: { gh } },
+                [otherId]: { mcpServers: { gh } },
+              },
+            }),
+          ),
+        ),
       ),
     );
   }).pipe(Effect.provide(layerDatabase)),
