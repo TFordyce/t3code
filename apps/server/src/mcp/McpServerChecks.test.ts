@@ -1,6 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - Node http fixture server for loopback tests.
 import * as NodeHttp from "node:http";
-import type { AddressInfo } from "node:net";
-import { fileURLToPath } from "node:url";
+import type * as NodeNet from "node:net";
+import * as NodeURL from "node:url";
 
 import { assert, it } from "@effect/vitest";
 import {
@@ -21,7 +22,7 @@ import * as McpSignIn from "./McpSignIn.ts";
 import { layerMemorySecretStore } from "./McpSignIn.testkit.ts";
 import * as McpUpstream from "./McpUpstream.ts";
 
-const fixture = fileURLToPath(new URL("./fakeMcpStdioServer.fixture.mjs", import.meta.url));
+const fixture = NodeURL.fileURLToPath(new URL("./fakeMcpStdioServer.fixture.mjs", import.meta.url));
 
 const json = (res: NodeHttp.ServerResponse, status: number, body: unknown) => {
   res.writeHead(status, { "content-type": "application/json" });
@@ -99,7 +100,7 @@ const startFakeHttpServer = Effect.acquireRelease(
 );
 
 const url = (server: NodeHttp.Server, path: string) =>
-  `http://127.0.0.1:${(server.address() as AddressInfo).port}${path}`;
+  `http://127.0.0.1:${(server.address() as NodeNet.AddressInfo).port}${path}`;
 
 const layerFor = (timeoutMs: number) =>
   McpServerChecks.layerWithTimeout(timeoutMs).pipe(

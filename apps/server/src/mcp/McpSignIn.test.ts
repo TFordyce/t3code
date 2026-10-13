@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDateInEffect:off globalFetchInEffect:off - Test clock arithmetic and a plain fetch against the loopback fixture.
 import { assert, it } from "@effect/vitest";
 import type { McpServerConfig } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";

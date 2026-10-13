@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, assert } from "@effect/vitest";
-import { ProjectId, type ServerSettingsPatch } from "@t3tools/contracts";
+import { ProjectId, type McpServerConfig, type ServerSettingsPatch } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -11,6 +11,8 @@ import * as ServerConfig from "./config.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
 import { mcpSignInSecretKey } from "./serverSettingsSecrets.ts";
+const stdioOf = (server: McpServerConfig | undefined) =>
+  server?.transport === "stdio" ? server : undefined;
 
 const layerServerSettingsWithSecrets = () =>
   ServerSettingsModule.layer.pipe(
@@ -72,7 +74,7 @@ it.layer(NodeServices.layer)("server settings mcpServers", (it) => {
 
       // Server code sees the real value; a client never does.
       const materialized = yield* settings.getSettings;
-      assert.strictEqual(materialized.mcpServers.gh?.env[0]?.value, "ghp_secret");
+      assert.strictEqual(stdioOf(materialized.mcpServers.gh)?.env[0]?.value, "ghp_secret");
       const forClient = ServerSettingsModule.redactServerSettingsForClient(materialized);
       assert.notInclude(JSON.stringify(forClient), "ghp_secret");
     }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
@@ -95,8 +97,8 @@ it.layer(NodeServices.layer)("server settings mcpServers", (it) => {
       });
 
       const next = yield* settings.getSettings;
-      assert.strictEqual(next.mcpServers.gh?.command, "other-command");
-      assert.strictEqual(next.mcpServers.gh?.env[0]?.value, "ghp_secret");
+      assert.strictEqual(stdioOf(next.mcpServers.gh)?.command, "other-command");
+      assert.strictEqual(stdioOf(next.mcpServers.gh)?.env[0]?.value, "ghp_secret");
     }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 

@@ -98,7 +98,7 @@ const applySecretValue = <Row extends ProviderInstanceEnvironmentVariable | McpS
     ...rest,
     value: next.value,
     ...(next.redacted ? { valueRedacted: true } : {}),
-  };
+  } as Row;
 };
 
 const providerEnvironmentKind: SecretKind = {
@@ -293,7 +293,7 @@ const mcpServerEnvironmentKind: SecretKind = {
 };
 
 /** Every secret-bearing settings field. Add a field here and it is covered everywhere. */
-export const SETTINGS_SECRET_KINDS: ReadonlyArray<SecretKind> = [
+const SETTINGS_SECRET_KINDS: ReadonlyArray<SecretKind> = [
   providerEnvironmentKind,
   usageLimitSourceKind,
   mcpServerEnvironmentKind,

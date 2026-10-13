@@ -124,7 +124,9 @@ describe("applyServerSettingsPatch mcpServers", () => {
   });
 
   it("does not leave args from the replaced entry behind", () => {
-    const current = withServers({ a: { ...stdio("a"), args: ["--old"] } });
+    const current = withServers({
+      a: { transport: "stdio", command: "a", args: ["--old"], env: [] },
+    });
     const next = applyServerSettingsPatch(current, { mcpServers: { a: stdio("a") } });
     expect(next.mcpServers.a).toEqual(stdio("a"));
   });

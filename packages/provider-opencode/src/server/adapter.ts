@@ -719,7 +719,7 @@ export function openCodePermissionRules(
  * are not T3's to allow. Every tool of a server asks, in every runtime mode:
  * the rule comes last and the last matching rule wins.
  */
-export function openCodeUserMcpRules(
+function openCodeUserMcpRules(
   servers: ReadonlyArray<McpProviderSession.UserMcpServer>,
 ): PermissionRuleset {
   return servers.map((server) => ({
@@ -1129,6 +1129,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             reported: reportedMcp,
           });
           if (mcpServers === undefined) return;
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - change-detection key, never parsed.
           const key = JSON.stringify(mcpServers);
           if (key === publishedMcp) return;
           publishedMcp = key;

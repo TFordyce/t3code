@@ -1067,6 +1067,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         reported: reportedMcp,
       });
       if (mcpServers === undefined) return;
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - change-detection key, never parsed.
       const key = JSON.stringify(mcpServers);
       if (key === publishedMcp) return;
       publishedMcp = key;

@@ -1981,6 +1981,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             reported: [...reportedMcpStatuses.values()],
           });
           if (mcpServers === undefined) return;
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - change-detection key, never parsed.
           const key = JSON.stringify(mcpServers);
           if (key === publishedMcpStatuses) return;
           publishedMcpStatuses = key;

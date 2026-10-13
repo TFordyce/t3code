@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto is async; the fingerprint is needed synchronously.
+import * as NodeCrypto from "node:crypto";
 
 import type {
   EnvironmentId,
@@ -46,7 +47,7 @@ export type UserMcpServer = UserMcpStdioServer | UserMcpHttpServer;
 
 /** Stable stand-in for an upstream URL, which may carry a token in its query. */
 export function upstreamUrlFingerprint(url: string): string {
-  return createHash("sha256").update(url).digest("hex");
+  return NodeCrypto.createHash("sha256").update(url).digest("hex");
 }
 
 /** The path the loopback proxy serves a user HTTP server at, under the MCP HTTP server. */

@@ -57,7 +57,7 @@ export function resolveMcpServers(
 function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, member: unknown) =>
     member !== null && typeof member === "object" && !Array.isArray(member)
-      ? Object.fromEntries(Object.entries(member).toSorted(([a], [b]) => a.localeCompare(b)))
+      ? Object.fromEntries(Object.entries(member).sort(([a], [b]) => a.localeCompare(b)))
       : member,
   );
 }

@@ -135,7 +135,7 @@ export const StoredMcpServers = Schema.Unknown.pipe(
 );
 
 /** Entries of a raw `mcpServers` value that `StoredMcpServers` would keep. */
-export function keepValidMcpServerEntries(raw: unknown): Record<string, unknown> {
+function keepValidMcpServerEntries(raw: unknown): Record<string, unknown> {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
   return Object.fromEntries(
     Object.entries(raw as Record<string, unknown>).filter(([name, config]) =>
