@@ -2159,6 +2159,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     // first one can exit (Queue.shutdown) and a later turn can start another.
     readonly freshQueueOnReopen?: boolean;
     readonly getContextUsage?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["getContextUsage"];
+    readonly mcpServerStatus?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["mcpServerStatus"];
   }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2256,6 +2257,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 ...(options?.getContextUsage === undefined
                   ? {}
                   : { getContextUsage: options.getContextUsage }),
+                ...(options?.mcpServerStatus === undefined
+                  ? {}
+                  : { mcpServerStatus: options.mcpServerStatus }),
               };
             }),
           forkSession: () => Effect.die("unused forkSession"),
@@ -3313,6 +3317,89 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         { name: "System prompt", tokens: 3_000 },
         { name: "System tools", tokens: 12_000 },
         { name: "Messages", tokens: 40_000 },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+      ),
+    ),
+  );
+
+  it.effect("publishes session MCP status after init and after a turn", () =>
+    Effect.gen(function* () {
+      let reports = 0;
+      const harness = yield* makeWakeHarnessWithOptions({
+        mcpServerStatus: Effect.sync(() => {
+          reports++;
+          return reports === 1
+            ? [
+                { name: "t3-code", status: "connected" as const },
+                { name: "docs", status: "pending" as const },
+                { name: "crm", status: "needs-auth" as const },
+              ]
+            : [
+                { name: "t3-code", status: "connected" as const },
+                {
+                  name: "docs",
+                  status: "connected" as const,
+                  tools: [{ name: "a" }, { name: "b" }],
+                },
+                { name: "crm", status: "failed" as const, error: "401" },
+              ];
+        }),
+      });
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      yield* mcpSessions.set({
+        environmentId: EnvironmentId.make("environment-claude-mcp-status"),
+        threadId: harness.threadId,
+        providerSessionId: "mcp-session-claude-status",
+        providerInstanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer secret",
+        browserToolsAvailable: false,
+        userMcp: {
+          servers: [
+            { name: "docs", transport: "stdio", command: "docs-mcp", args: [], env: {} },
+            { name: "crm", transport: "stdio", command: "crm-mcp", args: [], env: {} },
+          ],
+          skipped: [{ name: "vault", reason: "secret-unavailable" }],
+        },
+      });
+      const lists = () =>
+        harness.events.flatMap((event) =>
+          event.type === "provider_session.updated" &&
+          event.providerSession.mcpServers !== undefined
+            ? [event.providerSession.mcpServers]
+            : [],
+        );
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("claude-mcp-status"),
+          text: "Hello",
+          attachments: [],
+        }),
+      );
+      yield* harness.offerAndWait(wakeTurnInit);
+      yield* awaitUntil(() => lists().length === 1, "the status after init");
+      assert.deepEqual(lists()[0], [
+        { name: "docs", status: "connecting" },
+        { name: "crm", status: "needs-auth" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
+      ]);
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000412", result: "Done." }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+      yield* awaitUntil(() => lists().length === 2, "the status after the turn");
+      assert.deepEqual(lists()[1], [
+        { name: "docs", status: "connected", toolCount: 2 },
+        { name: "crm", status: "failed", error: "401" },
+        { name: "vault", status: "failed", error: "secret unavailable" },
       ]);
     }).pipe(
       Effect.scoped,

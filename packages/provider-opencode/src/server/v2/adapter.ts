@@ -49,6 +49,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
+  type McpSessionServerStatus,
   type ModelSelection,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
@@ -75,6 +76,7 @@ import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as OpenCode2Client from "./OpenCode2Client.ts";
 import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
+import { openCodeMcpStatus } from "../mcpStatus.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
@@ -105,7 +107,7 @@ import {
   openCodeUserMcpConfigKey,
   openCodeUserMcpServers,
 } from "../adapter.ts";
-import type * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import { openCodeToolTurnItem } from "../toolItems.ts";
 
 const OpenCode2ProviderCapabilities = {
@@ -692,6 +694,7 @@ const LOST_BACKGROUND =
   "T3 Code lost its connection to OpenCode while this subagent ran, so its result is not shown.";
 /** How long a turn waits on the directory's commands or skills before sending the text as is. */
 const INVENTORY_TIMEOUT = "5 seconds";
+
 const ACTIVE_CHECK_TIMEOUT = "5 seconds";
 /** Answers that mean the server refused a prompt; any other failure may have been accepted. */
 const CLEAR_PROMPT_REJECTIONS: ReadonlySet<string> = new Set([
@@ -1049,6 +1052,46 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         session = { ...session, status, lastError, updatedAt: yield* DateTime.now };
         yield* emit({ type: "provider_session.updated", driver, providerSession: session });
       });
+
+    // Session MCP status: the latest `mcp.list` answer for the directory the
+    // user's servers were last registered in, published as the session's list.
+    // `t3-code-<thread>` never appears: only configured user servers are named.
+    let mcpStatusConfig: McpProviderSession.McpProviderSessionConfig | undefined;
+    let mcpStatusDirectory: string | undefined;
+    let reportedMcp: ReadonlyArray<McpSessionServerStatus> = [];
+    let publishedMcp = "";
+    const publishMcpStatuses = Effect.gen(function* () {
+      const mcpServers = McpProviderSession.sessionMcpStatuses({
+        config: mcpStatusConfig,
+        transports: OpenCode2ProviderCapabilities.tools.userMcpTransports,
+        reported: reportedMcp,
+      });
+      if (mcpServers === undefined) return;
+      const key = JSON.stringify(mcpServers);
+      if (key === publishedMcp) return;
+      publishedMcp = key;
+      session = { ...session, mcpServers, updatedAt: yield* DateTime.now };
+      yield* emit({ type: "provider_session.updated", driver, providerSession: session });
+    });
+    /** Re-lists the servers' statuses after OpenCode says one changed. */
+    const refreshMcpStatuses = Effect.gen(function* () {
+      if (mcpStatusConfig?.userMcp === undefined || mcpStatusDirectory === undefined) return;
+      const listed = yield* client.mcp.list({ location: { directory: mcpStatusDirectory } }).pipe(
+        Effect.timeout(INVENTORY_TIMEOUT),
+        Effect.map((response) => response.data),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not list OpenCode's MCP servers.", cause).pipe(
+            Effect.as(undefined),
+          ),
+        ),
+      );
+      if (listed === undefined) return;
+      reportedMcp = listed.map((entry) => ({
+        name: entry.name,
+        ...openCodeMcpStatus(entry.status),
+      }));
+      yield* publishMcpStatuses;
+    });
 
     const ordinalOf = (turn: ActiveTurn, nativeId: string) => {
       const known = turn.ordinals.get(nativeId);
@@ -2471,6 +2514,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         : Effect.void;
 
     const handleEvent = Effect.fnUntraced(function* (event: OpenCode2Client.OpenCode2StreamEvent) {
+      if (event.type === "mcp.status.changed") return yield* refreshMcpStatuses;
       const sessionId = sessionOfEvent(event);
       // `revert.clear` wakes the session into an empty execution of its own
       // (2.0.18's `Session.revert.clear` ends with a wake). It is no run of
@@ -3373,6 +3417,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           );
         if (added) state.userMcp.set(server.name, { directory, config: serialized });
       }
+      mcpStatusConfig = mcpSession;
+      mcpStatusDirectory = directory;
+      yield* publishMcpStatuses;
       const instructions = [
         buildRuntimeInstructions({ harness: "OpenCode", model: turnInput.modelSelection.model }),
         t3OrchestrationSystemPrompt(state.mcp !== undefined),

@@ -17,6 +17,7 @@ import { causeErrorTag } from "@t3tools/shared/observability";
 import {
   defaultInstanceIdForDriver,
   type ModelSelection,
+  type McpSessionServerStatus,
   type OrchestrationV2AppThread,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
@@ -58,6 +59,7 @@ import * as Stream from "effect/Stream";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
+import { openCodeMcpStatus } from "./mcpStatus.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
@@ -1114,6 +1116,47 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
+
+        // Session MCP status: the user's servers as OpenCode last reported
+        // them. `t3-code` never appears, because only configured user servers
+        // are named.
+        let reportedMcp: ReadonlyArray<McpSessionServerStatus> = [];
+        let publishedMcp = "";
+        const publishMcpStatuses = Effect.gen(function* () {
+          const mcpServers = McpProviderSession.sessionMcpStatuses({
+            config: mcpSession,
+            transports: OpenCodeProviderCapabilitiesV2.tools.userMcpTransports,
+            reported: reportedMcp,
+          });
+          if (mcpServers === undefined) return;
+          const key = JSON.stringify(mcpServers);
+          if (key === publishedMcp) return;
+          publishedMcp = key;
+          sessionEntity = { ...sessionEntity, mcpServers, updatedAt: yield* DateTime.now };
+          yield* emitProviderEvent({
+            type: "provider_session.updated",
+            driver: OPENCODE_PROVIDER,
+            providerSession: sessionEntity,
+          });
+        });
+        /** Re-lists the servers' statuses after OpenCode says one changed. */
+        const refreshMcpStatuses = Effect.gen(function* () {
+          if (mcpSession?.userMcp === undefined) return;
+          const listed = yield* OpenCodeRuntime.runOpenCodeSdk("mcp.status", (signal) =>
+            client.mcp.status(undefined, { signal, throwOnError: true }),
+          ).pipe(
+            Effect.timeout("5 seconds"),
+            Effect.map((response) => Object.entries(response.data ?? {})),
+            Effect.catch(() => Effect.succeed(undefined)),
+          );
+          if (listed === undefined) return;
+          reportedMcp = listed.map(([name, status]) => ({
+            name,
+            ...openCodeMcpStatus(status),
+          }));
+          yield* publishMcpStatuses;
+        });
+        yield* publishMcpStatuses;
 
         const logProtocolEvent = makeOpenCodeProtocolLogger({
           nativeEventLogger: options.nativeEventLogger,
@@ -2640,6 +2683,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             method: event.type,
             payload: event,
           });
+          // Newer servers announce a status change; the 1.x event types omit it.
+          if ((event.type as string) === "mcp.status.changed") return yield* refreshMcpStatuses;
           switch (event.type) {
             case "server.connected":
               if (hasConnected) {
