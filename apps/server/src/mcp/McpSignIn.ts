@@ -47,7 +47,7 @@ import * as NodeCrypto from "node:crypto";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { mcpSignInSecretKey } from "../serverSettingsSecrets.ts";
+import { mcpSignInSecretKey } from "../settingsSecrets.ts";
 
 /** A pending flow is dropped after this long without a redirect. */
 const PENDING_FLOW_TTL_MS = 10 * 60_000;

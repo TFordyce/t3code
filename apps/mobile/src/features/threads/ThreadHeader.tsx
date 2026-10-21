@@ -1,12 +1,14 @@
-import { StackActions, useNavigation } from "@react-navigation/native";
+import { useNavigation } from "@react-navigation/native";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useMemo } from "react";
-import { ScreenHeader } from "../../components/ScreenHeader";
-import { ScreenHeaderButton } from "../../components/ScreenHeaderButton";
-import type { ScreenHeaderAction } from "../../components/ScreenHeader.types";
+import { AppBar } from "../../components/ui/AppBar";
+import { ScreenHeaderButton } from "../../components/ui/ScreenHeaderButton";
+import type { AppBarAction } from "../../components/ui/AppBar.types";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import type { ThreadInspectorMode } from "./thread-inspector-content-stack";
 import { useThreadHeaderOptions } from "./useThreadHeaderOptions";
+import { useWorkspaceBackNavigation } from "../workspace/useAndroidWorkspaceNavigation";
+import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 
 export function ThreadHeader(
   props: Parameters<typeof useThreadHeaderOptions>[0] & {
@@ -19,12 +21,14 @@ export function ThreadHeader(
     readonly onOpenFilesInspector: () => void;
   },
 ) {
+  const goBack = useWorkspaceBackNavigation("threads");
   const navigation = useNavigation();
-  const { layout, panes, toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
+  const { layout, panes, toggleAuxiliaryPane, composerKeyboardActive } =
+    useAdaptiveWorkspaceLayout();
   const { onOpenTerminal, onMergeBack, environmentId, threadId } = props.gitControls;
   const native = useThreadHeaderOptions(props);
-  const androidHeaderActions = useMemo<ReadonlyArray<ScreenHeaderAction>>(() => {
-    const actions: ScreenHeaderAction[] = [];
+  const androidHeaderActions = useMemo<ReadonlyArray<AppBarAction>>(() => {
+    const actions: AppBarAction[] = [];
     if (props.onReturnToThread) {
       actions.push({
         accessibilityLabel: "Return to chat",
@@ -65,7 +69,7 @@ export function ThreadHeader(
     if (onMergeBack) {
       actions.push({
         accessibilityLabel: "Merge back to source",
-        icon: "arrow.triangle.merge",
+        icon: PullRequestGlyph.merged,
         onPress: onMergeBack,
       });
     }
@@ -89,7 +93,7 @@ export function ThreadHeader(
 
   return (
     <>
-      <ScreenHeader
+      <AppBar
         title={props.title}
         subtitle={props.subtitle}
         sidebar={native.sidebar}
@@ -109,18 +113,10 @@ export function ThreadHeader(
             />
           ) : null
         }
-        onBack={
-          layout.usesSplitView
-            ? undefined
-            : () => {
-                // A deep link or cold start has no previous route; Home is the way out.
-                // Read the history at press time: it changes without re-rendering this screen.
-                if (navigation.canGoBack()) navigation.goBack();
-                else navigation.dispatch(StackActions.replace("Home"));
-              }
-        }
+        onBack={layout.usesSplitView ? undefined : goBack}
         actions={androidHeaderActions}
         hideBottomBorder
+        compact={composerKeyboardActive}
       />
       {native.fallback}
     </>
