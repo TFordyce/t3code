@@ -1566,35 +1566,27 @@ export function claudeMcpQueryOverrides(input: {
     ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
     : [CLAUDE_T3_MCP_TOOL_WILDCARD];
   // User servers are deliberately left out of `allowedTools`: their tools go
-  // through the normal permission flow. Env values travel as `${VAR}`
-  // placeholders in the argv config, with the real values in the child env.
+  // through the normal permission flow. They travel on the CLI's control
+  // channel with the t3-code entry, so their secrets stay out of argv.
   const userServers: Record<string, NonNullable<ClaudeQueryOptions["mcpServers"]>[string]> = {};
-  const userEnvironment: Record<string, string> = {};
-  McpProviderSession.userMcpServersFor(
+  for (const server of McpProviderSession.userMcpServersFor(
     session,
     ClaudeProviderCapabilitiesV2.tools.userMcpTransports,
-  ).forEach((server, index) => {
-    if (server.transport === "http") {
-      userServers[server.name] = {
-        type: "http",
-        url: server.url,
-        headers: { Authorization: `\${${CLAUDE_T3_MCP_AUTHORIZATION_ENV}}` },
-      };
-      return;
-    }
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(server.env)) {
-      const variable = `T3_CODE_USER_MCP_${index}_${key.replace(/[^A-Za-z0-9]/g, "_").toUpperCase()}`;
-      env[key] = `\${${variable}}`;
-      userEnvironment[variable] = value;
-    }
-    userServers[server.name] = {
-      type: "stdio",
-      command: server.command,
-      args: [...server.args],
-      env,
-    };
-  });
+  )) {
+    userServers[server.name] =
+      server.transport === "http"
+        ? {
+            type: "http",
+            url: server.url,
+            headers: { Authorization: session.authorizationHeader },
+          }
+        : {
+            type: "stdio",
+            command: server.command,
+            args: [...server.args],
+            env: { ...server.env },
+          };
+  }
   return {
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
@@ -1607,10 +1599,6 @@ export function claudeMcpQueryOverrides(input: {
         timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
       },
       ...userServers,
-    },
-    mcpEnvironment: {
-      [CLAUDE_T3_MCP_AUTHORIZATION_ENV]: session.authorizationHeader,
-      ...userEnvironment,
     },
   };
 }

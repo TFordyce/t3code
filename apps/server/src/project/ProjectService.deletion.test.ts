@@ -542,25 +542,18 @@ it.effect("deleting a project removes its MCP overrides and keeps other projects
     yield* seedProject(projectId);
     yield* Effect.gen(function* () {
       const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({
+        projectSettingsOverrides: {
+          [projectId]: { defaultAutoPull: true, mcpServers: { gh } },
+          [otherId]: { mcpServers: { gh } },
+        },
+      });
       const service = yield* ProjectService.make;
       yield* service.delete({ commandId: CommandId.make("command:mcp-overrides"), projectId });
 
       const overrides = (yield* settings.getSettings).projectSettingsOverrides;
       assert.isUndefined(overrides[projectId]);
       assert.deepEqual(overrides[otherId]?.mcpServers, { gh });
-    }).pipe(
-      Effect.provide(
-        layerServices.pipe(
-          Layer.provideMerge(
-            ServerSettings.layerTest({
-              projectSettingsOverrides: {
-                [projectId]: { defaultAutoPull: true, mcpServers: { gh } },
-                [otherId]: { mcpServers: { gh } },
-              },
-            }),
-          ),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(layerServices));
   }).pipe(Effect.provide(layerDatabase)),
 );

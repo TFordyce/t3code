@@ -1264,6 +1264,7 @@ describe("CursorAdapterV2", () => {
       runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: "/workspace" },
       threadId,
       mcpSession,
+      platform: "linux",
     });
     assert.deepEqual(options.mcpServers, {
       "t3-code": {

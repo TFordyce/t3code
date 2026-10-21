@@ -352,11 +352,11 @@ export function resolveServerUpdateProgressResult<E>(
  * likewise read as a fresh freeze on the next launch.
  */
 const withoutCachedState = (config: ServerConfig): ServerConfig => {
-  const {
-    mcpServerChecks: _checks,
-    lastEventLoopStall: _stall,
-    ...rest
-  } = withoutEnvironmentThemes(config);
+  const stripped = withoutEnvironmentThemes(config);
+  if (stripped.mcpServerChecks === undefined && stripped.lastEventLoopStall === undefined) {
+    return stripped;
+  }
+  const { mcpServerChecks: _checks, lastEventLoopStall: _stall, ...rest } = stripped;
   return rest;
 };
 

@@ -447,7 +447,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     browserToolsAvailable: true,
   });
 
-  it("carries user servers beside t3-code with secrets only in the child env", () => {
+  it("carries user servers beside t3-code on the same control channel", () => {
     const threadId = ThreadId.make("thread-claude-user-mcp");
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
       mcpSession: {
@@ -476,22 +476,16 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
 
     const servers = overrides.mcpServers as Record<string, unknown>;
     assert.deepEqual(Object.keys(servers), ["t3-code", "github", "docs"]);
-    const placeholder = (servers.github as { env: Record<string, string> }).env.GITHUB_TOKEN!;
-    assert.match(placeholder, /^\$\{[A-Z0-9_]+\}$/);
-    const envName = placeholder.slice(2, -1);
-    assert.equal(overrides.mcpEnvironment?.[envName], "ghp_secret");
     assert.deepEqual(servers.github, {
       type: "stdio",
       command: "npx",
       args: ["-y", "gh-mcp"],
-      env: { GITHUB_TOKEN: placeholder },
+      env: { GITHUB_TOKEN: "ghp_secret" },
     });
     const docs = servers.docs as { type: string; url: string; headers: Record<string, string> };
     assert.equal(docs.type, "http");
     assert.equal(docs.url, "http://127.0.0.1:43123/mcp-proxy/docs");
-    assert.equal(docs.headers.Authorization, "${T3_CODE_MCP_AUTHORIZATION}");
-    assert.notInclude(JSON.stringify(servers), "ghp_secret");
-    assert.notInclude(JSON.stringify(servers), "secret-claude-token");
+    assert.equal(docs.headers.Authorization, "Bearer secret-claude-token");
     assert.deepEqual(overrides.allowedTools, [ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD]);
   });
 
@@ -4997,7 +4991,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         }),
       );
       yield* harness.offerAndWait(wakeTurnInit);
-      yield* awaitUntil(() => lists().length === 1, "the status after init");
+      yield* harness.until(() => lists().length === 1);
       assert.deepEqual(lists()[0], [
         { name: "docs", status: "connecting" },
         { name: "crm", status: "needs-auth" },
@@ -5008,7 +5002,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000412", result: "Done." }),
       );
       yield* Queue.take(harness.terminalReceipts);
-      yield* awaitUntil(() => lists().length === 2, "the status after the turn");
+      yield* harness.until(() => lists().length === 2);
       assert.deepEqual(lists()[1], [
         { name: "docs", status: "connected", toolCount: 2 },
         { name: "crm", status: "failed", error: "401" },
