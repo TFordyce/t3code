@@ -19,12 +19,19 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   ClaudeMcpStatusError,
+  ClaudeMcpToggleError,
   ClaudeSettings,
+  defaultInstanceIdForDriver,
   type ClaudeMcpServerReport,
   type ClaudeMcpStatusInput,
   type ClaudeMcpStatusResult,
+  type ProjectId,
   ProviderDriverKind,
+  type ServerSettings as ServerSettingsValue,
+  type SetClaudeMcpServerEnabledInput,
 } from "@t3tools/contracts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -55,6 +62,11 @@ const PROBE_SETTING_SOURCES = [
 
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+interface ProbeKey {
+  readonly cwd: string;
+  readonly disabledServers: ReadonlyArray<string>;
+}
+
 /** The SDK `query` entry point, injectable so tests can fake the Claude process. */
 export type ClaudeMcpQuery = typeof claudeQuery;
 
@@ -64,6 +76,7 @@ export type ClaudeMcpQuery = typeof claudeQuery;
  * Hooks stay off: the probe runs on page open, and SessionStart hooks must not.
  */
 function buildClaudeMcpProbeQueryOptions(input: {
+  readonly disabledServers: ReadonlyArray<string>;
   readonly executablePath: string;
   readonly abortController: AbortController;
   readonly environment: NodeJS.ProcessEnv;
@@ -74,7 +87,14 @@ function buildClaudeMcpProbeQueryOptions(input: {
     pathToClaudeCodeExecutable: input.executablePath,
     abortController: input.abortController,
     settingSources: [...PROBE_SETTING_SOURCES],
-    settings: { disableAllHooks: true },
+    // `disabledMcpjsonServers` keeps project `.mcp.json` servers from starting
+    // at all; the rest are switched off right after init (see `runProbe`).
+    settings: {
+      disableAllHooks: true,
+      ...(input.disabledServers.length === 0
+        ? {}
+        : { disabledMcpjsonServers: [...input.disabledServers] }),
+    },
     allowedTools: [],
     env: {
       ...input.environment,
@@ -89,12 +109,13 @@ function buildClaudeMcpProbeQueryOptions(input: {
   };
 }
 
-function toReport(server: McpServerStatus): ClaudeMcpServerReport {
+function toReport(server: McpServerStatus, disabled: ReadonlySet<string>): ClaudeMcpServerReport {
+  const isDisabled = disabled.has(server.name);
   return {
     name: server.name,
-    status: server.status,
-    toolCount: server.tools?.length ?? 0,
-    ...(server.error === undefined ? {} : { error: server.error }),
+    status: isDisabled ? "disabled" : server.status,
+    toolCount: isDisabled ? 0 : (server.tools?.length ?? 0),
+    ...(server.error === undefined || isDisabled ? {} : { error: server.error }),
     ...(server.scope === undefined ? {} : { scope: server.scope }),
     ...(server.source === undefined ? {} : { source: server.source }),
   };
@@ -107,30 +128,55 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   });
 }
 
+/** The names Claude must not load for a project (or the environment when `projectId` is absent). */
+const disabledServersFor = (
+  settings: ServerSettingsValue,
+  projectId: ProjectId | undefined,
+): ReadonlyArray<string> =>
+  resolveProjectSettings(settings, projectId ?? null).settings.claudeDisabledMcpServers;
+
 export class ClaudeMcpStatus extends Context.Service<
   ClaudeMcpStatus,
   {
-    /** Every MCP server Claude would load in `cwd`. Cached for five minutes per directory. */
+    /**
+     * Every MCP server Claude would load in `cwd`, with the disabled list that
+     * applies to `projectId` honoured. Cached for five minutes per directory
+     * and list.
+     */
     readonly probe: (
       input: ClaudeMcpStatusInput,
     ) => Effect.Effect<ClaudeMcpStatusResult, ClaudeMcpStatusError>;
+    /**
+     * Turns one server on or off: saves it to the environment's disabled list
+     * (or the project's own, seeded from what applies to it) and switches it
+     * in every running Claude session it newly applies to. T3 never edits
+     * Claude's own config files. Works with no session running.
+     */
+    readonly setServerEnabled: (
+      input: SetClaudeMcpServerEnabledInput,
+    ) => Effect.Effect<void, ClaudeMcpToggleError>;
   }
 >()("t3/provider/ClaudeMcpStatus") {}
 
 const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery) {
   const settingsService = yield* ServerSettings.ServerSettingsService;
+  const liveSessions = yield* McpProviderSessions.McpProviderSessions;
   const path = yield* Path.Path;
 
   const resolveSettings = settingsService.getSettings.pipe(
     Effect.flatMap((settings) =>
       Effect.try(() =>
-        decodeClaudeSettings(settings.providerInstances[CLAUDE_DRIVER_KIND]?.config ?? {}),
+        decodeClaudeSettings(
+          settings.providerInstances[defaultInstanceIdForDriver(CLAUDE_DRIVER_KIND)]?.config ?? {},
+        ),
       ),
     ),
     Effect.mapError((cause) => new ClaudeMcpStatusError({ reason: "settings", cause })),
   );
 
-  const runProbe = Effect.fn("ClaudeMcpStatus.probe")(function* (cwd: string) {
+  const runProbe = Effect.fn("ClaudeMcpStatus.probe")(function* (key: ProbeKey) {
+    const { cwd, disabledServers } = key;
+    const disabled = new Set(disabledServers);
     const settings = yield* resolveSettings;
     const environment = yield* makeClaudeEnvironment(settings).pipe(
       Effect.provideService(Path.Path, path),
@@ -151,6 +197,7 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
             abortController: abort,
             environment,
             cwd,
+            disabledServers,
           }),
         }),
       catch: (cause) => new ClaudeMcpStatusError({ reason: "startFailed", cause }),
@@ -158,6 +205,13 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
 
     const readSettled = Effect.gen(function* () {
       yield* Effect.tryPromise(() => started.initializationResult());
+      // A name Claude does not know (a connector the user has since removed)
+      // fails to toggle; the rest of the list still applies.
+      yield* Effect.forEach(
+        disabledServers,
+        (name) => Effect.tryPromise(() => started.toggleMcpServer(name, false)).pipe(Effect.ignore),
+        { discard: true },
+      );
       while (true) {
         const servers = yield* Effect.tryPromise(() => started.mcpServerStatus());
         if (!servers.some((server) => server.status === "pending")) return servers;
@@ -173,19 +227,74 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
       return yield* new ClaudeMcpStatusError({ reason: "timeout" });
     }
     return {
-      servers: settled.value.map(toReport),
+      servers: settled.value.map((server) => toReport(server, disabled)),
       checkedAt: DateTime.formatIso(yield* DateTime.now),
     } satisfies ClaudeMcpStatusResult;
   });
 
   // Cache.get dedupes concurrent lookups for a key; only successes are kept.
-  const cache = yield* Cache.makeWith(runProbe, {
+  // Keyed by directory and disabled list, so a toggle never serves a stale probe.
+  const cache = yield* Cache.makeWith((key: string) => runProbe(JSON.parse(key) as ProbeKey), {
     capacity: CACHE_CAPACITY,
     timeToLive: (exit) => (Exit.isSuccess(exit) ? CACHE_TTL : Duration.zero),
   });
 
+  const setServerEnabled = Effect.fn("ClaudeMcpStatus.setServerEnabled")(
+    function* (input: SetClaudeMcpServerEnabledInput) {
+      const before = yield* settingsService.getSettings;
+      const current = disabledServersFor(before, input.projectId);
+      const next = input.enabled
+        ? current.filter((name) => name !== input.name)
+        : current.includes(input.name)
+          ? current
+          : [...current, input.name];
+      yield* settingsService.updateSettings(
+        input.projectId === undefined
+          ? { claudeDisabledMcpServers: [...next] }
+          : {
+              projectSettingsOverrides: {
+                [input.projectId]: {
+                  ...before.projectSettingsOverrides[input.projectId],
+                  claudeDisabledMcpServers: [...next],
+                },
+              },
+            },
+      );
+      const after = yield* settingsService.getSettings;
+      // Each live session answers for its own project: a global change skips a
+      // project that keeps its own list, and a project change skips the others.
+      const toggles = yield* liveSessions.liveToggles;
+      yield* Effect.forEach(
+        toggles,
+        (live) => {
+          const wasDisabled = disabledServersFor(before, live.projectId).includes(input.name);
+          const isDisabled = disabledServersFor(after, live.projectId).includes(input.name);
+          return wasDisabled === isDisabled
+            ? Effect.void
+            : live
+                .toggle(input.name, !isDisabled)
+                .pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("claude-mcp-live-toggle-failed", { name: input.name, cause }),
+                  ),
+                );
+        },
+        { discard: true },
+      );
+    },
+    Effect.mapError((cause) => new ClaudeMcpToggleError({ cause })),
+  );
+
   return ClaudeMcpStatus.of({
-    probe: ({ cwd }) => Cache.get(cache, cwd),
+    probe: Effect.fnUntraced(function* ({ cwd, projectId }) {
+      const settings = yield* settingsService.getSettings.pipe(
+        Effect.mapError((cause) => new ClaudeMcpStatusError({ reason: "settings", cause })),
+      );
+      const key: ProbeKey = { cwd, disabledServers: [...disabledServersFor(settings, projectId)] };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - cache key, never parsed from outside.
+      return yield* Cache.get(cache, JSON.stringify(key));
+    }),
+    setServerEnabled,
   });
 });
 

@@ -1018,6 +1018,10 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverCheckMcpServers,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    setClaudeMcpServerEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:set-claude-mcp-server-enabled",
+      tag: WS_METHODS.serverSetClaudeMcpServerEnabled,
+    }),
     startMcpServerSignIn: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:start-mcp-server-sign-in",
       tag: WS_METHODS.serverStartMcpServerSignIn,

@@ -1742,6 +1742,143 @@ describe("ClaudeAdapterV2 native fork", () => {
   );
 });
 
+describe("ClaudeAdapterV2 disabled MCP servers", () => {
+  it.effect("hands the disabled list to the query and exposes a live toggle for the process", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-v2-disabled-mcp-",
+        });
+        const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
+        const toggled: Array<readonly [string, boolean]> = [];
+        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
+          idAllocator,
+          queryRunner: {
+            allocateSessionId: Effect.succeed("native-session"),
+            open: (input) =>
+              Effect.sync(() => {
+                openedQueries.push(input);
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  applyFlagSettings: () => Effect.void,
+                  setPermissionMode: () => Effect.void,
+                  backgroundTasks: () => Effect.succeed(false),
+                  stopTask: () => Effect.void,
+                  toggleMcpServer: (name: string, enabled: boolean) =>
+                    Effect.sync(() => void toggled.push([name, enabled])),
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const providerSessionId = ProviderSessionId.make("provider-session-claude-disabled-mcp");
+        const threadId = ThreadId.make("thread-claude-disabled-mcp");
+        const projectId = ProjectId.make("project-claude-disabled-mcp");
+        const modelSelection = {
+          instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
+          model: "claude-sonnet-4-6",
+        };
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: "/workspace",
+        });
+        yield* sessions.set({
+          environmentId: EnvironmentId.make("environment-claude-disabled-mcp"),
+          threadId,
+          providerSessionId: "mcp-session-claude-disabled-mcp",
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer secret-claude-token",
+          browserToolsAvailable: true,
+          claudeDisabledMcpServers: ["docs", "claude.ai Gmail"],
+        });
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime.startTurn({
+          appThread: {
+            createdBy: "user",
+            creationSource: "web",
+            id: threadId,
+            projectId,
+            title: "Claude disabled MCP",
+            providerInstanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: providerThread.id,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+          threadId,
+          runId: RunId.make("run-claude-disabled-mcp"),
+          runOrdinal: 1,
+          providerTurnOrdinal: 1,
+          attemptId: RunAttemptId.make("run-attempt-claude-disabled-mcp"),
+          rootNodeId: NodeId.make("node-claude-disabled-mcp-root"),
+          providerThread,
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: MessageId.make("message-claude-disabled-mcp"),
+            text: "hello",
+            attachments: [],
+          },
+          modelSelection,
+          runtimePolicy,
+        });
+
+        assert.deepEqual(openedQueries[0]?.disabledMcpServers, ["docs", "claude.ai Gmail"]);
+
+        const live = yield* sessions.liveToggles;
+        assert.equal(live.length, 1);
+        assert.equal(live[0]?.projectId, projectId);
+        yield* live[0]!.toggle("docs", true);
+        assert.deepEqual(toggled, [["docs", true]]);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+});
+
 function makeFakeClaudeCli(answerSetServers = true) {
   const spawns: Array<SpawnOptions> = [];
   const controlRequests: Array<object> = [];

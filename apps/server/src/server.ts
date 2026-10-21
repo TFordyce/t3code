@@ -632,6 +632,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
 
 const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(layerPtyAdapter),
+  // Reaches live Claude sessions through McpProviderSessions, provided just below.
+  Layer.provideMerge(ClaudeMcpStatus.layer),
   Layer.provideMerge(AcpRegistrySupport.layerFromHost.pipe(Layer.provide(ProviderHostLive.layer))),
   Layer.provideMerge(
     Layer.mergeAll(
@@ -640,7 +642,6 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
       ResetCreditCoordinator.layer,
       ProviderLatestVersions.layer,
       McpProviderSessions.layer,
-      ClaudeMcpStatus.layer,
       // One McpSignIn and McpUpstream are shared by checks, the proxy and the RPCs.
       McpServerChecks.layer.pipe(
         Layer.provideMerge(McpUpstream.layer),

@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** Mirrors the status values the Claude Agent SDK reports for a loaded MCP server. */
 export const ClaudeMcpServerStatusValue = Schema.Literals([
@@ -30,6 +30,8 @@ export type ClaudeMcpServerReport = typeof ClaudeMcpServerReport.Type;
 export const ClaudeMcpStatusInput = Schema.Struct({
   /** The directory Claude is started in: the project root, or a user-level directory. */
   cwd: TrimmedNonEmptyString,
+  /** Whose disabled list applies: the project's override, else the environment's. */
+  projectId: Schema.optional(ProjectId),
 });
 export type ClaudeMcpStatusInput = typeof ClaudeMcpStatusInput.Type;
 
@@ -55,5 +57,26 @@ export class ClaudeMcpStatusError extends Schema.TaggedError<ClaudeMcpStatusErro
       case "timeout":
         return "Claude's MCP servers did not finish connecting in time.";
     }
+  }
+}
+
+/**
+ * Turns one Claude MCP server on or off. With `projectId` the project's own
+ * disabled list is written (seeded from what applies to it today); without,
+ * the environment-wide list.
+ */
+export const SetClaudeMcpServerEnabledInput = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  enabled: Schema.Boolean,
+  projectId: Schema.optional(ProjectId),
+});
+export type SetClaudeMcpServerEnabledInput = typeof SetClaudeMcpServerEnabledInput.Type;
+
+export class ClaudeMcpToggleError extends Schema.TaggedError<ClaudeMcpToggleError>()(
+  "ClaudeMcpToggleError",
+  { cause: Schema.optional(Schema.Defect()) },
+) {
+  override get message(): string {
+    return "Could not save the Claude MCP server setting.";
   }
 }
