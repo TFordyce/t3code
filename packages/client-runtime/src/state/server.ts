@@ -1173,6 +1173,13 @@ export function createServerEnvironmentAtoms<R, E>(
           ),
         ),
     }),
+    // Probing starts Claude and its MCP servers, so automatic reads are
+    // throttled per environment and directory; a manual refresh bypasses that.
+    claudeMcpStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:claude-mcp-status",
+      tag: WS_METHODS.serverGetClaudeMcpStatus,
+      staleTimeMs: 5 * 60_000,
+    }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,
