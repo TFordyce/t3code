@@ -7,6 +7,8 @@ import {
   ClaudeMcpStatusError,
   ClaudeMcpStatusInput,
   ClaudeMcpStatusResult,
+  ClaudeMcpToggleError,
+  SetClaudeMcpServerEnabledInput,
 } from "./claudeMcpStatus.ts";
 import {
   CheckMcpServersInput,
@@ -494,6 +496,7 @@ export const WS_METHODS = {
   serverRunStorageCleanup: "server.runStorageCleanup",
   serverCheckMcpServers: "server.checkMcpServers",
   serverGetClaudeMcpStatus: "server.getClaudeMcpStatus",
+  serverSetClaudeMcpServerEnabled: "server.setClaudeMcpServerEnabled",
   serverStartMcpServerSignIn: "server.startMcpServerSignIn",
   serverCompleteMcpServerSignIn: "server.completeMcpServerSignIn",
   serverSignOutMcpServer: "server.signOutMcpServer",
@@ -767,6 +770,11 @@ const WsServerGetClaudeMcpStatusRpc = Rpc.make(WS_METHODS.serverGetClaudeMcpStat
   payload: ClaudeMcpStatusInput,
   success: ClaudeMcpStatusResult,
   error: Schema.Union([ClaudeMcpStatusError, EnvironmentAuthorizationError]),
+});
+const WsServerSetClaudeMcpServerEnabledRpc = Rpc.make(WS_METHODS.serverSetClaudeMcpServerEnabled, {
+  payload: SetClaudeMcpServerEnabledInput,
+  success: Schema.Struct({}),
+  error: Schema.Union([ClaudeMcpToggleError, EnvironmentAuthorizationError]),
 });
 const WsServerStartMcpServerSignInRpc = Rpc.make(WS_METHODS.serverStartMcpServerSignIn, {
   payload: McpServerCheckTarget,
@@ -1954,6 +1962,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRunStorageCleanupRpc,
   WsServerCheckMcpServersRpc,
   WsServerGetClaudeMcpStatusRpc,
+  WsServerSetClaudeMcpServerEnabledRpc,
   WsServerStartMcpServerSignInRpc,
   WsServerCompleteMcpServerSignInRpc,
   WsServerSignOutMcpServerRpc,

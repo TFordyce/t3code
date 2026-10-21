@@ -7,6 +7,9 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
+import { ProjectId, ThreadId } from "@t3tools/contracts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+
 import * as ServerSettings from "../serverSettings.ts";
 import * as ClaudeMcpStatus from "./ClaudeMcpStatus.ts";
 
@@ -16,6 +19,7 @@ type FakeStatus = (call: number) => Promise<ReadonlyArray<McpServerStatus>>;
 const makeFakeQuery = (mcpServerStatus: FakeStatus) => {
   const started: Array<Options> = [];
   const aborted: Array<boolean> = [];
+  const toggles: Array<readonly [string, boolean]> = [];
   let statusCalls = 0;
   const query = ((args: { readonly options?: Options }) => {
     const options = args.options ?? {};
@@ -26,17 +30,27 @@ const makeFakeQuery = (mcpServerStatus: FakeStatus) => {
     });
     return {
       initializationResult: () => Promise.resolve({}),
+      toggleMcpServer: (name: string, enabled: boolean) => {
+        toggles.push([name, enabled]);
+        return Promise.resolve();
+      },
       mcpServerStatus: () => mcpServerStatus(++statusCalls),
     };
   }) as unknown as ClaudeMcpStatus.ClaudeMcpQuery;
-  return { query, started, aborted, statusCalls: () => statusCalls };
+  return { query, started, aborted, toggles, statusCalls: () => statusCalls };
 };
 
-const layerFor = (query: ClaudeMcpStatus.ClaudeMcpQuery) =>
-  ClaudeMcpStatus.makeLayer({ query }).pipe(
-    Layer.provide(ServerSettings.layerTest()),
-    Layer.provide(NodeServices.layer),
+const layerFor = (
+  query: ClaudeMcpStatus.ClaudeMcpQuery,
+  settings: Parameters<typeof ServerSettings.layerTest>[0] = {},
+) => {
+  const base = Layer.mergeAll(
+    ServerSettings.layerTest(settings),
+    McpProviderSessions.layer,
+    NodeServices.layer,
   );
+  return ClaudeMcpStatus.makeLayer({ query }).pipe(Layer.provideMerge(base));
+};
 
 const connected = (name: string, extra: Partial<McpServerStatus> = {}): McpServerStatus => ({
   name,
@@ -184,4 +198,121 @@ it.effect("dedupes concurrent requests for the same working directory", () => {
     yield* Fiber.join(both);
     assert.equal(fake.started.length, 1);
   }).pipe(Effect.provide(layerFor(fake.query)));
+});
+
+const projectId = ProjectId.make("project-1");
+const otherProjectId = ProjectId.make("project-2");
+
+it.effect("probes with the disabled list applied and reports those servers as disabled", () => {
+  const fake = makeFakeQuery(() =>
+    Promise.resolve([connected("docs", { scope: "project" }), connected("gmail")]),
+  );
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const result = yield* service.probe({ cwd: "/work/app" });
+    assert.deepStrictEqual(fake.toggles, [["docs", false]]);
+    assert.deepStrictEqual(fake.started[0]?.settings, {
+      disableAllHooks: true,
+      disabledMcpjsonServers: ["docs"],
+    });
+    assert.deepStrictEqual(
+      result.servers.map((server) => [server.name, server.status, server.toolCount]),
+      [
+        ["docs", "disabled", 0],
+        ["gmail", "connected", 2],
+      ],
+    );
+  }).pipe(Effect.provide(layerFor(fake.query, { claudeDisabledMcpServers: ["docs"] })));
+});
+
+it.effect("uses the project's own disabled list when it overrides the environment's", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([connected("docs"), connected("gmail")]));
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    yield* service.probe({ cwd: "/work/app", projectId });
+    assert.deepStrictEqual(fake.toggles, [["gmail", false]]);
+    yield* service.probe({ cwd: "/work/app", projectId: otherProjectId });
+    assert.deepStrictEqual(fake.toggles, [
+      ["gmail", false],
+      ["docs", false],
+    ]);
+  }).pipe(
+    Effect.provide(
+      layerFor(fake.query, {
+        claudeDisabledMcpServers: ["docs"],
+        projectSettingsOverrides: { [projectId]: { claudeDisabledMcpServers: ["gmail"] } },
+      }),
+    ),
+  );
+});
+
+it.effect("disabling a server with no running session saves it and re-probes fresh", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([connected("docs")]));
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const before = yield* service.probe({ cwd: "/work/app" });
+    assert.equal(before.servers[0]?.status, "connected");
+
+    yield* service.setServerEnabled({ name: "docs", enabled: false });
+    assert.deepStrictEqual((yield* settings.getSettings).claudeDisabledMcpServers, ["docs"]);
+
+    const after = yield* service.probe({ cwd: "/work/app" });
+    assert.equal(after.servers[0]?.status, "disabled");
+
+    yield* service.setServerEnabled({ name: "docs", enabled: true });
+    assert.deepStrictEqual((yield* settings.getSettings).claudeDisabledMcpServers, []);
+  }).pipe(Effect.provide(layerFor(fake.query)));
+});
+
+it.effect("a project toggle writes the project's list, seeded from what applies to it", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* service.setServerEnabled({ name: "gmail", enabled: false, projectId });
+    const stored = yield* settings.getSettings;
+    assert.deepStrictEqual(stored.claudeDisabledMcpServers, ["docs"]);
+    assert.deepStrictEqual(stored.projectSettingsOverrides[projectId]?.claudeDisabledMcpServers, [
+      "docs",
+      "gmail",
+    ]);
+  }).pipe(Effect.provide(layerFor(fake.query, { claudeDisabledMcpServers: ["docs"] })));
+});
+
+it.effect("a toggle reaches live sessions whose effective list changed, and only those", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  const live: Array<readonly [string, string, boolean]> = [];
+  const register = (threadId: string, session: ProjectId) =>
+    McpProviderSessions.McpProviderSessions.pipe(
+      Effect.flatMap((sessions) =>
+        sessions.setLiveToggle(ThreadId.make(threadId), {
+          projectId: session,
+          toggle: (name, enabled) => Effect.sync(() => void live.push([threadId, name, enabled])),
+        }),
+      ),
+    );
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    yield* register("t-a", projectId);
+    yield* register("t-b", otherProjectId);
+
+    yield* service.setServerEnabled({ name: "docs", enabled: false });
+    // `projectId` pins its own list, so only the other project's session changes.
+    assert.deepStrictEqual(live, [["t-b", "docs", false]]);
+
+    yield* service.setServerEnabled({ name: "docs", enabled: false, projectId });
+    assert.deepStrictEqual(live.at(-1), ["t-a", "docs", false]);
+    assert.equal(live.length, 2);
+
+    yield* service.setServerEnabled({ name: "docs", enabled: true });
+    assert.deepStrictEqual(live.at(-1), ["t-b", "docs", true]);
+    assert.equal(live.length, 3);
+  }).pipe(
+    Effect.provide(
+      layerFor(fake.query, {
+        projectSettingsOverrides: { [projectId]: { claudeDisabledMcpServers: [] } },
+      }),
+    ),
+  );
 });
