@@ -4,6 +4,11 @@ import {
   OrchestrationV2SearchThreadResult,
 } from "./orchestrationV2.ts";
 import {
+  ClaudeMcpStatusError,
+  ClaudeMcpStatusInput,
+  ClaudeMcpStatusResult,
+} from "./claudeMcpStatus.ts";
+import {
   CheckMcpServersInput,
   CompleteMcpServerSignInInput,
   McpServerCheckTarget,
@@ -488,6 +493,7 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
   serverCheckMcpServers: "server.checkMcpServers",
+  serverGetClaudeMcpStatus: "server.getClaudeMcpStatus",
   serverStartMcpServerSignIn: "server.startMcpServerSignIn",
   serverCompleteMcpServerSignIn: "server.completeMcpServerSignIn",
   serverSignOutMcpServer: "server.signOutMcpServer",
@@ -756,6 +762,11 @@ const WsServerCheckMcpServersRpc = Rpc.make(WS_METHODS.serverCheckMcpServers, {
   payload: CheckMcpServersInput,
   success: Schema.Struct({}),
   error: EnvironmentAuthorizationError,
+});
+const WsServerGetClaudeMcpStatusRpc = Rpc.make(WS_METHODS.serverGetClaudeMcpStatus, {
+  payload: ClaudeMcpStatusInput,
+  success: ClaudeMcpStatusResult,
+  error: Schema.Union([ClaudeMcpStatusError, EnvironmentAuthorizationError]),
 });
 const WsServerStartMcpServerSignInRpc = Rpc.make(WS_METHODS.serverStartMcpServerSignIn, {
   payload: McpServerCheckTarget,
@@ -1942,6 +1953,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,
   WsServerCheckMcpServersRpc,
+  WsServerGetClaudeMcpStatusRpc,
   WsServerStartMcpServerSignInRpc,
   WsServerCompleteMcpServerSignInRpc,
   WsServerSignOutMcpServerRpc,

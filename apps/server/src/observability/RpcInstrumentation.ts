@@ -57,6 +57,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverRemoveKeybinding]: "server",
   [WS_METHODS.serverRunStorageCleanup]: "server",
   [WS_METHODS.serverCheckMcpServers]: "server",
+  [WS_METHODS.serverGetClaudeMcpStatus]: "server",
   [WS_METHODS.serverStartMcpServerSignIn]: "server",
   [WS_METHODS.serverCompleteMcpServerSignIn]: "server",
   [WS_METHODS.serverSignOutMcpServer]: "server",

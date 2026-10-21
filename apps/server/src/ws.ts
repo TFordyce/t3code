@@ -258,6 +258,7 @@ import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as McpServerChecks from "./mcp/McpServerChecks.ts";
+import * as ClaudeMcpStatus from "./provider/ClaudeMcpStatus.ts";
 import * as McpSignIn from "./mcp/McpSignIn.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1290,6 +1291,7 @@ export const layerWsRpc = (
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const mcpServerChecks = yield* McpServerChecks.McpServerChecks;
       const mcpSignIn = yield* McpSignIn.McpSignIn;
+      const claudeMcpStatus = yield* ClaudeMcpStatus.ClaudeMcpStatus;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -2391,6 +2393,7 @@ export const layerWsRpc = (
         [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
         [WS_METHODS.serverCheckMcpServers]: ({ targets }) =>
           mcpServerChecks.check(targets).pipe(Effect.as({})),
+        [WS_METHODS.serverGetClaudeMcpStatus]: (input) => claudeMcpStatus.probe(input),
         [WS_METHODS.serverStartMcpServerSignIn]: (target) => mcpSignIn.start(target),
         [WS_METHODS.serverCompleteMcpServerSignIn]: ({ callbackUrl, ...target }) =>
           mcpSignIn.complete(target, callbackUrl).pipe(Effect.as({})),
