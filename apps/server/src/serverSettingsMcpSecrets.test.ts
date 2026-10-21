@@ -6,11 +6,8 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  mcpSignInSecretKey,
-  planSettingsSecretPersist,
-  redactSettingsSecrets,
-} from "./serverSettingsSecrets.ts";
+import { redactServerSettingsForClient as redactSettingsSecrets } from "./serverSettings.ts";
+import { mcpSignInSecretKey, planSettingsSecretPersist } from "./settingsSecrets.ts";
 
 const stdioWith = (env: ReadonlyArray<{ name: string; value: string; sensitive: boolean }>) =>
   ({ transport: "stdio", command: "npx", args: [], env }) as const;

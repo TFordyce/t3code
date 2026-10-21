@@ -10,7 +10,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
-import { mcpSignInSecretKey } from "./serverSettingsSecrets.ts";
+import { mcpSignInSecretKey } from "./settingsSecrets.ts";
 const stdioOf = (server: McpServerConfig | undefined) =>
   server?.transport === "stdio" ? server : undefined;
 

@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { mcpSignInSecretKey } from "../serverSettingsSecrets.ts";
+import { mcpSignInSecretKey } from "../settingsSecrets.ts";
 import * as McpSignIn from "./McpSignIn.ts";
 import {
   authorizationRedirect,
