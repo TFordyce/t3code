@@ -274,7 +274,11 @@ export const OrchestrationV2ToolCapabilities = Schema.Struct({
   /** Whether the provider carries the built-in `t3-code` server. */
   supportsMcpTools: Schema.Boolean,
   /** User MCP server transports the adapter passes through; adapters skip any not listed. */
-  userMcpTransports: Schema.Array(OrchestrationV2UserMcpTransport),
+  // Snapshots persisted before this field existed are read on every thread load, so a
+  // missing key must decode (to "forwards none") instead of failing the whole thread.
+  userMcpTransports: Schema.Array(OrchestrationV2UserMcpTransport).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   supportsDynamicToolCallbacks: Schema.Boolean,
 });
 export type OrchestrationV2ToolCapabilities = typeof OrchestrationV2ToolCapabilities.Type;

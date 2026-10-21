@@ -205,7 +205,7 @@ describe("orchestration V2 contracts", () => {
     ).toThrow();
   });
 
-  it("decodes persisted capability snapshots that predate runtimePolicy", () => {
+  it("decodes persisted capability snapshots that predate runtimePolicy and userMcpTransports", () => {
     const legacyCapabilities = {
       sessions: {
         supportsMultipleProviderThreadsPerSession: false,
@@ -246,7 +246,6 @@ describe("orchestration V2 contracts", () => {
         emitsToolCompleted: true,
         emitsToolOutput: true,
         supportsMcpTools: false,
-        userMcpTransports: [],
         supportsDynamicToolCallbacks: false,
       },
       approvals: {
@@ -300,6 +299,7 @@ describe("orchestration V2 contracts", () => {
 
     const decoded = decodeOrchestrationV2ProviderCapabilities(legacyCapabilities);
     expect(decoded.runtimePolicy).toEqual({ enforcement: "client-boundary" });
+    expect(decoded.tools.userMcpTransports).toEqual([]);
 
     const explicit = decodeOrchestrationV2ProviderCapabilities({
       ...legacyCapabilities,
