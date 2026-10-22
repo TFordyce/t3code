@@ -327,7 +327,9 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
   Layer.mock(ProjectStore.ProjectStoreV2)({}),
   Layer.mock(ProviderAuthService.ProviderAuthService)({}),
-  Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
+  Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+    listInstances: Effect.succeed([]),
+  }),
   Layer.mock(ProviderLatestVersions.ProviderLatestVersions)({}),
   Layer.mock(ProviderMaintenanceRunner.ProviderMaintenanceRunner)({}),
   Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
