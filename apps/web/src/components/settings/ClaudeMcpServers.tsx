@@ -5,7 +5,7 @@
  *
  * @module ClaudeMcpServers
  */
-import type { EnvironmentId, ProjectId, ServerProvider } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ServerProvider, ThreadId } from "@t3tools/contracts";
 import {
   claudeMcpView,
   unreportedProviderNames,
@@ -18,6 +18,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
+import { ClaudeMcpReconnectButton } from "./ClaudeMcpReconnectButton";
 import { ClaudeMcpToggleButton } from "./ClaudeMcpToggleButton";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsSection } from "./settingsLayout";
@@ -74,20 +75,42 @@ function Tone({ row }: { readonly row: ClaudeMcpRow }) {
   );
 }
 
-/** Claude's live status line, as it sits under a T3-configured or built-in row. */
-export function ClaudeLiveStatus({ row }: { readonly row: ClaudeMcpRow | undefined }) {
+/**
+ * Claude's live status line, as it sits under a T3-configured or built-in row.
+ * A failed server also gets Reconnect, disabled without a `threadId`.
+ */
+export function ClaudeLiveStatus(props: {
+  readonly row: ClaudeMcpRow | undefined;
+  readonly environmentId: EnvironmentId;
+  readonly threadId?: ThreadId | undefined;
+  readonly onReconnected?: (() => void) | undefined;
+}) {
+  const { row } = props;
   if (row === undefined) return null;
   return (
-    <div>
+    <div className="flex items-center gap-2">
       <Tone row={row} />
+      {row.status === "failed" ? (
+        <ClaudeMcpReconnectButton
+          environmentId={props.environmentId}
+          threadId={props.threadId}
+          name={row.name}
+          onReconnected={props.onReconnected}
+        />
+      ) : null}
     </div>
   );
 }
 
-/** Claude-only servers grouped by scope, each with its Enable/Disable control. */
+/**
+ * Claude-only servers grouped by scope, each with its Enable/Disable control
+ * and, when failed, Reconnect (disabled without a `threadId`).
+ */
 export function ClaudeMcpGroups(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId?: ProjectId | undefined;
+  readonly threadId?: ThreadId | undefined;
+  readonly onReconnected?: (() => void) | undefined;
   readonly groups: ReadonlyArray<ClaudeMcpGroup>;
 }) {
   return (
@@ -119,12 +142,22 @@ export function ClaudeMcpGroups(props: {
                     <p className="text-xs text-muted-foreground">{row.guidance.text}</p>
                   ) : null}
                 </div>
-                <ClaudeMcpToggleButton
-                  environmentId={props.environmentId}
-                  projectId={props.projectId}
-                  name={row.name}
-                  status={row.status}
-                />
+                <div className="flex shrink-0 items-center gap-2">
+                  {row.status === "failed" ? (
+                    <ClaudeMcpReconnectButton
+                      environmentId={props.environmentId}
+                      threadId={props.threadId}
+                      name={row.name}
+                      onReconnected={props.onReconnected}
+                    />
+                  ) : null}
+                  <ClaudeMcpToggleButton
+                    environmentId={props.environmentId}
+                    projectId={props.projectId}
+                    name={row.name}
+                    status={row.status}
+                  />
+                </div>
               </div>
             ))}
           </SettingsGroup>
@@ -173,7 +206,13 @@ export function ClaudeMcpSection(props: {
           </Alert>
         </div>
       ) : null}
-      {view ? <ClaudeMcpGroups environmentId={props.environmentId} groups={view.groups} /> : null}
+      {view ? (
+        <ClaudeMcpGroups
+          environmentId={props.environmentId}
+          groups={view.groups}
+          onReconnected={refresh}
+        />
+      ) : null}
       {view !== null && view.groups.length === 0 ? (
         <p className="px-3 py-3 text-sm text-muted-foreground sm:px-4">
           Claude has no user or org servers loaded.

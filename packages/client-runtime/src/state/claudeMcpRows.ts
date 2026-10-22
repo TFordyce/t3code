@@ -40,6 +40,10 @@ const GROUP_LABELS: ReadonlyArray<readonly [scope: string, label: string]> = [
   ["sdk", "SDK"],
 ];
 
+/** Where servers with no scope, or one this list does not know, land so they never vanish. */
+const OTHER_SCOPE = "other";
+const OTHER_GROUP_LABEL: readonly [scope: string, label: string] = [OTHER_SCOPE, "Other"];
+
 const CLAUDE_AI_CONNECTORS_URL = "https://claude.ai/settings/connectors";
 
 const TONES: Record<ClaudeMcpServerReport["status"], ClaudeMcpTone> = {
@@ -89,7 +93,8 @@ const withGuidance = (report: ClaudeMcpServerReport): ClaudeMcpRow => {
 /**
  * Claude's report as the MCP page shows it. A server whose name matches a
  * T3-configured one lands in `merged`, to sit beside that row's editable
- * controls; the rest are read-only, grouped by scope. `t3-code` is T3's own and
+ * controls; the rest are grouped by scope, with unscoped or unrecognised ones
+ * under "Other". `t3-code` is T3's own and
  * only tagged built in.
  */
 export function claudeMcpView(input: {
@@ -111,12 +116,14 @@ export function claudeMcpView(input: {
       builtIn = toRow(report);
     } else if (t3Names.has(report.name)) {
       merged.set(report.name, toRow(report));
-    } else if (
-      [...GROUP_LABELS, ...PROJECT_GROUP_LABELS].some(([scope]) => scope === report.scope)
-    ) {
-      const rows = byScope.get(report.scope!) ?? [];
+    } else {
+      const known = [...GROUP_LABELS, ...PROJECT_GROUP_LABELS].some(
+        ([scope]) => scope === report.scope,
+      );
+      const scope = known ? report.scope! : OTHER_SCOPE;
+      const rows = byScope.get(scope) ?? [];
       rows.push(withGuidance(report));
-      byScope.set(report.scope!, rows);
+      byScope.set(scope, rows);
     }
   }
   const toGroups = (labels: typeof GROUP_LABELS) =>
@@ -129,26 +136,33 @@ export function claudeMcpView(input: {
   return {
     builtIn,
     merged,
-    groups: toGroups(GROUP_LABELS),
+    groups: toGroups([...GROUP_LABELS, OTHER_GROUP_LABEL]),
     projectGroups: toGroups(PROJECT_GROUP_LABELS),
   };
 }
 
 /**
- * Display names of enabled providers other than Claude. Only Claude reports its
- * loaded servers, so the page says the rest do not.
+ * Display names of enabled providers other than Claude that carry user MCP
+ * servers. Only Claude reports its loaded servers, so the page says the rest do
+ * not; a provider with no MCP support (Grok, Antigravity) is not named.
  */
 export function unreportedProviderNames(
   providers: ReadonlyArray<{
     readonly driver: string;
     readonly enabled: boolean;
     readonly displayName?: string | undefined;
+    readonly userMcpTransports?: ReadonlyArray<string> | undefined;
   }>,
 ): ReadonlyArray<string> {
   return [
     ...new Set(
       providers
-        .filter((provider) => provider.enabled && provider.driver !== "claudeAgent")
+        .filter(
+          (provider) =>
+            provider.enabled &&
+            provider.driver !== "claudeAgent" &&
+            (provider.userMcpTransports?.length ?? 0) > 0,
+        )
         .map((provider) => provider.displayName ?? provider.driver),
     ),
   ];

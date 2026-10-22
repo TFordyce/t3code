@@ -21,11 +21,20 @@ const probe = vi.hoisted(() => ({
 
 vi.mock(import("../../state/server"), async (original) => {
   const actual = await original();
+  const { Atom } = await import("effect/reactivity");
   return {
     ...actual,
     serverEnvironment: {
       ...actual.serverEnvironment,
       claudeMcpStatus: probe.claudeMcpStatus as never,
+      reconnectClaudeMcpServer: {
+        ...actual.serverEnvironment.reconnectClaudeMcpServer,
+        permissionAtom: () => Atom.make(true),
+      },
+      setClaudeMcpServerEnabled: {
+        ...actual.serverEnvironment.setClaudeMcpServerEnabled,
+        permissionAtom: () => Atom.make(true),
+      },
     },
   };
 });
@@ -49,7 +58,8 @@ const provider = (driver: string, displayName: string): ServerProvider =>
     displayName,
     enabled: true,
     status: "ready",
-  }) as ServerProvider;
+    userMcpTransports: ["stdio", "http"],
+  }) as unknown as ServerProvider;
 
 const renderSection = () =>
   render(
@@ -94,5 +104,24 @@ describe("ClaudeMcpSection", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(probe.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("shows Reconnect disabled with its reason, and Enable for a disabled server", async () => {
+    probe.view = {
+      data: {
+        servers: [
+          { name: "broken", status: "failed", toolCount: 0, scope: "user", error: "spawn ENOENT" },
+          { name: "off", status: "disabled", toolCount: 0, scope: "user" },
+        ],
+      },
+      error: null,
+      isPending: false,
+    };
+    const screen = await renderSection();
+
+    const reconnect = screen.getByRole("button", { name: "Reconnect" });
+    await expect.element(reconnect).toBeDisabled();
+    await expect.element(reconnect).toHaveAttribute("title", "No active session");
+    await expect.element(screen.getByRole("button", { name: "Enable" })).toBeVisible();
   });
 });

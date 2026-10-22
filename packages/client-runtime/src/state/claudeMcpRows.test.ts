@@ -50,7 +50,6 @@ describe("claudeMcpView", () => {
         report({ name: "dyn", scope: "dynamic" }),
         report({ name: "ag", scope: "agent" }),
         report({ name: "mine", scope: "user" }),
-        report({ name: "unknown", scope: undefined }),
       ],
       t3Names: [],
     });
@@ -62,6 +61,19 @@ describe("claudeMcpView", () => {
       ["Local", ["loc"]],
       ["Dynamic", ["dyn"]],
       ["Agent", ["ag"]],
+    ]);
+  });
+
+  it("shows servers with no or an unrecognised scope under Other instead of dropping them", () => {
+    const view = claudeMcpView({
+      servers: [
+        report({ name: "bare", scope: undefined }),
+        report({ name: "odd", scope: "somethingnew" }),
+      ],
+      t3Names: [],
+    });
+    expect(view.groups.map((group) => [group.label, group.rows.map((row) => row.name)])).toEqual([
+      ["Other", ["bare", "odd"]],
     ]);
   });
 
@@ -129,14 +141,22 @@ describe("claudeMcpView", () => {
 });
 
 describe("unreportedProviderNames", () => {
-  it("names enabled providers other than Claude", () => {
+  it("names enabled non-Claude providers that support MCP, and skips those that do not", () => {
+    const transports = ["stdio", "http"];
     expect(
       unreportedProviderNames([
-        { driver: "claudeAgent", enabled: true, displayName: "Claude" },
-        { driver: "codex", enabled: true, displayName: "Codex" },
-        { driver: "cursor", enabled: false },
-        { driver: "opencode", enabled: true },
-        { driver: "codex", enabled: true, displayName: "Codex" },
+        {
+          driver: "claudeAgent",
+          enabled: true,
+          displayName: "Claude",
+          userMcpTransports: transports,
+        },
+        { driver: "codex", enabled: true, displayName: "Codex", userMcpTransports: transports },
+        { driver: "cursor", enabled: false, userMcpTransports: transports },
+        { driver: "opencode", enabled: true, userMcpTransports: transports },
+        { driver: "codex", enabled: true, displayName: "Codex", userMcpTransports: transports },
+        { driver: "antigravity", enabled: true, displayName: "Antigravity", userMcpTransports: [] },
+        { driver: "grok", enabled: true, displayName: "Grok", userMcpTransports: [] },
       ]),
     ).toEqual(["Codex", "opencode"]);
   });

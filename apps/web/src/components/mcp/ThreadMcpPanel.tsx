@@ -36,36 +36,6 @@ const STATUS_BADGE_VARIANT = {
   unknown: "outline",
 } as const;
 
-/** Servers Claude loads because of the project directory (project, local, dynamic, agent). */
-function ClaudeProjectServers(props: {
-  readonly environmentId: EnvironmentId;
-  readonly projectId: ProjectId | null;
-  readonly cwd: string | null;
-  readonly t3Names: ReadonlyArray<string>;
-}) {
-  const providers =
-    useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ??
-    EMPTY_SERVER_PROVIDERS;
-  const { view } = useClaudeMcpStatus({
-    environmentId: props.environmentId,
-    cwd: props.cwd,
-    projectId: props.projectId ?? undefined,
-    providers,
-    t3Names: props.t3Names,
-  });
-  if (view === null || view.projectGroups.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-1">
-      <h3 className="text-xs font-medium text-muted-foreground">Claude project servers</h3>
-      <ClaudeMcpGroups
-        environmentId={props.environmentId}
-        projectId={props.projectId ?? undefined}
-        groups={view.projectGroups}
-      />
-    </div>
-  );
-}
-
 export function ThreadMcpPanel(props: {
   readonly environmentId: EnvironmentId;
   /** The provider session's report, or `null` when it reported nothing. */
@@ -86,6 +56,16 @@ export function ThreadMcpPanel(props: {
         : mcpThreadFallback(mcpServerListRows({ settings, config, projectId: props.projectId }));
     return threadMcpRows({ sessionServers: props.sessionServers, ...fallback });
   }, [config, props.projectId, props.sessionServers, settings]);
+  const providers =
+    useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
+  const claude = useClaudeMcpStatus({
+    environmentId: props.environmentId,
+    cwd: props.cwd,
+    projectId: props.projectId ?? undefined,
+    providers,
+    t3Names: rows.map((row) => row.name),
+  });
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3">
@@ -126,6 +106,7 @@ export function ThreadMcpPanel(props: {
                     environmentId={props.environmentId}
                     threadId={props.threadId}
                     name={row.name}
+                    onReconnected={claude.refresh}
                   />
                 ) : null}
                 <Badge variant={STATUS_BADGE_VARIANT[row.status]}>
@@ -136,12 +117,18 @@ export function ThreadMcpPanel(props: {
           ))}
         </ul>
       )}
-      <ClaudeProjectServers
-        environmentId={props.environmentId}
-        projectId={props.projectId}
-        cwd={props.cwd}
-        t3Names={rows.map((row) => row.name)}
-      />
+      {claude.view !== null && claude.view.projectGroups.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <h3 className="text-xs font-medium text-muted-foreground">Claude project servers</h3>
+          <ClaudeMcpGroups
+            environmentId={props.environmentId}
+            projectId={props.projectId ?? undefined}
+            threadId={props.threadId}
+            groups={claude.view.projectGroups}
+            onReconnected={claude.refresh}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

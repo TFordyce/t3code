@@ -1,7 +1,6 @@
-import { act, render } from "../../../test/render";
+import { render } from "../../../test/render";
 import { RegistryProvider } from "@effect/atom-react";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({ reconnect: vi.fn(), allowed: true }));
@@ -44,28 +43,14 @@ it("is disabled with its reason when no thread session is attached", async () =>
   expect(state.reconnect).not.toHaveBeenCalled();
 });
 
-it("reconnects through the thread's session, then lets the list re-probe", async () => {
+it("is enabled when a thread session is attached", async () => {
   state.allowed = true;
-  state.reconnect.mockReset().mockResolvedValue(AsyncResult.success({}));
-  const onReconnected = vi.fn();
   await using screen = await render(
     <RegistryProvider>
-      <ClaudeMcpReconnectButton
-        environmentId={environmentId}
-        threadId={threadId}
-        name="docs"
-        onReconnected={onReconnected}
-      />
+      <ClaudeMcpReconnectButton environmentId={environmentId} threadId={threadId} name="docs" />
     </RegistryProvider>,
   );
-  const button = screen.container.querySelector("button")!;
-  expect(button.disabled).toBe(false);
-  await act(async () => button.click());
-  expect(state.reconnect).toHaveBeenCalledWith({
-    environmentId,
-    input: { threadId, name: "docs" },
-  });
-  expect(onReconnected).toHaveBeenCalledOnce();
+  expect(screen.container.querySelector("button")!.disabled).toBe(false);
 });
 
 it("hides the control without the providers-manage grant", async () => {

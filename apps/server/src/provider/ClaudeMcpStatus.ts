@@ -36,6 +36,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -64,10 +65,10 @@ const PROBE_SETTING_SOURCES = [
 
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
-interface ProbeKey {
+class ProbeKey extends Data.Class<{
   readonly cwd: string;
   readonly disabledServers: ReadonlyArray<string>;
-}
+}> {}
 
 /** The SDK `query` entry point, injectable so tests can fake the Claude process. */
 export type ClaudeMcpQuery = typeof claudeQuery;
@@ -243,7 +244,7 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
 
   // Cache.get dedupes concurrent lookups for a key; only successes are kept.
   // Keyed by directory and disabled list, so a toggle never serves a stale probe.
-  const cache = yield* Cache.makeWith((key: string) => runProbe(JSON.parse(key) as ProbeKey), {
+  const cache = yield* Cache.makeWith(runProbe, {
     capacity: CACHE_CAPACITY,
     timeToLive: (exit) => (Exit.isSuccess(exit) ? CACHE_TTL : Duration.zero),
   });
@@ -310,9 +311,11 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
       const settings = yield* settingsService.getSettings.pipe(
         Effect.mapError((cause) => new ClaudeMcpStatusError({ reason: "settings", cause })),
       );
-      const key: ProbeKey = { cwd, disabledServers: [...disabledServersFor(settings, projectId)] };
-      // @effect-diagnostics-next-line preferSchemaOverJson:off - cache key, never parsed from outside.
-      return yield* Cache.get(cache, JSON.stringify(key));
+      const key = new ProbeKey({
+        cwd,
+        disabledServers: [...disabledServersFor(settings, projectId)],
+      });
+      return yield* Cache.get(cache, key);
     }),
     setServerEnabled,
     reconnectServer,

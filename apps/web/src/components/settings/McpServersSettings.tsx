@@ -316,7 +316,11 @@ function McpServersEnvironmentPanel({
             <div className="min-w-0">
               <p className="text-sm font-medium text-foreground">t3-code</p>
               <p className="text-xs text-muted-foreground">T3 Code tools · auto-approved</p>
-              <ClaudeLiveStatus row={claude.view?.builtIn} />
+              <ClaudeLiveStatus
+                row={claude.view?.builtIn}
+                environmentId={environmentId}
+                onReconnected={claude.refresh}
+              />
             </div>
             <Badge variant="secondary">Built in</Badge>
           </div>
@@ -346,6 +350,7 @@ function McpServersEnvironmentPanel({
                 providers={providers}
                 check={selectMcpServerCheck(serverConfig, "global", name)}
                 claude={claude.view?.merged.get(name)}
+                onClaudeReconnected={claude.refresh}
                 environmentLabel={environmentLabel}
                 canCheck={canCheck}
                 signIn={{ environmentId, target: { scope: "global", name }, canManage }}
@@ -395,9 +400,11 @@ function McpServerRow({
   onUseEnvironmentConfig,
   signIn,
   claude,
+  onClaudeReconnected,
 }: {
   /** Claude's own report of this server, where the page has one. */
   readonly claude?: ClaudeMcpRow | undefined;
+  readonly onClaudeReconnected?: (() => void) | undefined;
   readonly signIn: McpSignInProps;
   readonly name: string;
   readonly config: McpServerConfig;
@@ -435,7 +442,13 @@ function McpServerRow({
               {check === undefined ? null : ` · checked on ${environmentLabel}`}
             </p>
           ) : null}
-          {enabled ? <ClaudeLiveStatus row={claude} /> : null}
+          {enabled ? (
+            <ClaudeLiveStatus
+              row={claude}
+              environmentId={signIn.environmentId}
+              onReconnected={onClaudeReconnected}
+            />
+          ) : null}
           {enabled ? <McpSignInControls {...signIn} config={config} check={check} /> : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
