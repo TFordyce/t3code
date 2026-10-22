@@ -10,13 +10,19 @@ import {
   mcpServerListRows,
   mcpThreadFallback,
 } from "@t3tools/client-runtime/state/mcp-server-checks";
-import type { EnvironmentId, McpSessionServerStatus, ProjectId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  McpSessionServerStatus,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { ClaudeMcpGroups, useClaudeMcpStatus } from "../settings/ClaudeMcpServers";
 import { Badge } from "../ui/badge";
+import { ClaudeMcpReconnectButton } from "../settings/ClaudeMcpReconnectButton";
 import { Button } from "../ui/button";
 import { MCP_STATUS_LABELS, threadMcpRows } from "./ThreadMcpPanel.logic";
 
@@ -68,6 +74,8 @@ export function ThreadMcpPanel(props: {
   readonly projectId: ProjectId | null;
   /** The project's working directory, where Claude is asked which servers it loads. */
   readonly cwd: string | null;
+  /** The thread whose running session a failed server reconnects in. */
+  readonly threadId: ThreadId;
 }) {
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
@@ -112,9 +120,18 @@ export function ThreadMcpPanel(props: {
                   </div>
                 ) : null}
               </div>
-              <Badge variant={STATUS_BADGE_VARIANT[row.status]}>
-                {MCP_STATUS_LABELS[row.status]}
-              </Badge>
+              <div className="flex shrink-0 items-center gap-2">
+                {row.status === "failed" ? (
+                  <ClaudeMcpReconnectButton
+                    environmentId={props.environmentId}
+                    threadId={props.threadId}
+                    name={row.name}
+                  />
+                ) : null}
+                <Badge variant={STATUS_BADGE_VARIANT[row.status]}>
+                  {MCP_STATUS_LABELS[row.status]}
+                </Badge>
+              </div>
             </li>
           ))}
         </ul>

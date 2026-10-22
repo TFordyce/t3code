@@ -513,6 +513,10 @@ export interface ClaudeAgentSdkQuerySession {
     name: string,
     enabled: boolean,
   ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  // Reconnects one MCP server in the running process; optional so query fakes can leave it out.
+  readonly reconnectMcpServer?: (
+    name: string,
+  ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   // The /context categories; optional so query fakes can leave it out.
   readonly getContextUsage?: Effect.Effect<
     { readonly categories: ReadonlyArray<ClaudeContextUsageCategory> },
@@ -1162,6 +1166,11 @@ export const layerQueryRunner: Layer.Layer<
             Effect.tryPromise({
               try: () => queryRuntime.toggleMcpServer(name, enabled),
               catch: (cause) => queryRunnerError(cause, "toggleMcpServer"),
+            }),
+          reconnectMcpServer: (name) =>
+            Effect.tryPromise({
+              try: () => queryRuntime.reconnectMcpServer(name),
+              catch: (cause) => queryRunnerError(cause, "reconnectMcpServer"),
             }),
           // Summary detail answers from local estimates, with no token-count API calls.
           getContextUsage: Effect.tryPromise({
@@ -9494,6 +9503,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // Lets a toggle in Settings reach this process without a restart. A
           // closed process is skipped, so a stale registration is harmless.
           const toggleMcpServer = querySession.toggleMcpServer;
+          const reconnectMcpServer = querySession.reconnectMcpServer;
           if (toggleMcpServer !== undefined) {
             yield* mcpSessions.setLiveToggle(turnInput.threadId, {
               projectId: turnInput.appThread.projectId,
@@ -9509,6 +9519,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       name,
                       error,
                     }),
+                  ),
+                ),
+              reconnect: (name) =>
+                Ref.get(queryContext).pipe(
+                  Effect.flatMap((live) =>
+                    reconnectMcpServer !== undefined &&
+                    live?.query === querySession &&
+                    !live.stopping
+                      ? reconnectMcpServer(name).pipe(Effect.as(true))
+                      : Effect.succeed(false),
                   ),
                 ),
             });

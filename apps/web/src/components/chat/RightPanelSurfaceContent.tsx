@@ -185,6 +185,7 @@ export function RightPanelSurfaceContent(props: {
           sessionServers={props.mcp.sessionServers}
           projectId={props.mcp.projectId}
           cwd={props.mcp.cwd}
+          threadId={threadRef.threadId}
         />
       );
     case "device":

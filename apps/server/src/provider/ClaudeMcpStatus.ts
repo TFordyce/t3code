@@ -18,6 +18,7 @@ import {
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
+  ClaudeMcpReconnectError,
   ClaudeMcpStatusError,
   ClaudeMcpToggleError,
   ClaudeSettings,
@@ -26,6 +27,7 @@ import {
   type ClaudeMcpStatusInput,
   type ClaudeMcpStatusResult,
   type ProjectId,
+  type ReconnectClaudeMcpServerInput,
   ProviderDriverKind,
   type ServerSettings as ServerSettingsValue,
   type SetClaudeMcpServerEnabledInput,
@@ -155,6 +157,13 @@ export class ClaudeMcpStatus extends Context.Service<
     readonly setServerEnabled: (
       input: SetClaudeMcpServerEnabledInput,
     ) => Effect.Effect<void, ClaudeMcpToggleError>;
+    /**
+     * Reconnects one server in the thread's running Claude process. Fails with
+     * `noSession` when the thread has none; the caller re-probes afterwards.
+     */
+    readonly reconnectServer: (
+      input: ReconnectClaudeMcpServerInput,
+    ) => Effect.Effect<void, ClaudeMcpReconnectError>;
   }
 >()("t3/provider/ClaudeMcpStatus") {}
 
@@ -285,6 +294,17 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
     Effect.mapError((cause) => new ClaudeMcpToggleError({ cause })),
   );
 
+  const reconnectServer = Effect.fn("ClaudeMcpStatus.reconnectServer")(function* (
+    input: ReconnectClaudeMcpServerInput,
+  ) {
+    const live = yield* liveSessions.liveToggle(input.threadId);
+    if (live === undefined) return yield* new ClaudeMcpReconnectError({ reason: "noSession" });
+    const reconnected = yield* live
+      .reconnect(input.name)
+      .pipe(Effect.mapError((cause) => new ClaudeMcpReconnectError({ reason: "failed", cause })));
+    if (!reconnected) return yield* new ClaudeMcpReconnectError({ reason: "noSession" });
+  });
+
   return ClaudeMcpStatus.of({
     probe: Effect.fnUntraced(function* ({ cwd, projectId }) {
       const settings = yield* settingsService.getSettings.pipe(
@@ -295,6 +315,7 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
       return yield* Cache.get(cache, JSON.stringify(key));
     }),
     setServerEnabled,
+    reconnectServer,
   });
 });
 

@@ -1754,6 +1754,7 @@ describe("ClaudeAdapterV2 disabled MCP servers", () => {
         });
         const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
         const toggled: Array<readonly [string, boolean]> = [];
+        const reconnected: Array<string> = [];
         const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
           settings: DEFAULT_CLAUDE_SETTINGS,
@@ -1778,6 +1779,8 @@ describe("ClaudeAdapterV2 disabled MCP servers", () => {
                   stopTask: () => Effect.void,
                   toggleMcpServer: (name: string, enabled: boolean) =>
                     Effect.sync(() => void toggled.push([name, enabled])),
+                  reconnectMcpServer: (name: string) =>
+                    Effect.sync(() => void reconnected.push(name)),
                   interrupt: Effect.void,
                   close: Effect.void,
                 };
@@ -1870,6 +1873,9 @@ describe("ClaudeAdapterV2 disabled MCP servers", () => {
         assert.equal(live[0]?.projectId, projectId);
         yield* live[0]!.toggle("docs", true);
         assert.deepEqual(toggled, [["docs", true]]);
+
+        assert.equal(yield* live[0]!.reconnect("docs"), true);
+        assert.deepEqual(reconnected, ["docs"]);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),

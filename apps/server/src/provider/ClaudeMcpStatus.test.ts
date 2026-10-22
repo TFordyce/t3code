@@ -289,6 +289,7 @@ it.effect("a toggle reaches live sessions whose effective list changed, and only
         sessions.setLiveToggle(ThreadId.make(threadId), {
           projectId: session,
           toggle: (name, enabled) => Effect.sync(() => void live.push([threadId, name, enabled])),
+          reconnect: () => Effect.succeed(true),
         }),
       ),
     );
@@ -315,4 +316,59 @@ it.effect("a toggle reaches live sessions whose effective list changed, and only
       }),
     ),
   );
+});
+
+it.effect("reconnect reaches the thread's live process", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  const reconnected: Array<string> = [];
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const sessions = yield* McpProviderSessions.McpProviderSessions;
+    yield* sessions.setLiveToggle(ThreadId.make("t-a"), {
+      projectId,
+      toggle: () => Effect.void,
+      reconnect: (name) => Effect.sync(() => void reconnected.push(name)).pipe(Effect.as(true)),
+    });
+    yield* service.reconnectServer({ threadId: ThreadId.make("t-a"), name: "docs" });
+    assert.deepStrictEqual(reconnected, ["docs"]);
+  }).pipe(Effect.provide(layerFor(fake.query)));
+});
+
+it.effect("reconnect says there is no session when the thread has no live process", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const sessions = yield* McpProviderSessions.McpProviderSessions;
+    const none = yield* service
+      .reconnectServer({ threadId: ThreadId.make("t-none"), name: "docs" })
+      .pipe(Effect.flip);
+    assert.equal(none.reason, "noSession");
+
+    yield* sessions.setLiveToggle(ThreadId.make("t-closed"), {
+      projectId,
+      toggle: () => Effect.void,
+      reconnect: () => Effect.succeed(false),
+    });
+    const closed = yield* service
+      .reconnectServer({ threadId: ThreadId.make("t-closed"), name: "docs" })
+      .pipe(Effect.flip);
+    assert.equal(closed.reason, "noSession");
+  }).pipe(Effect.provide(layerFor(fake.query)));
+});
+
+it.effect("reconnect surfaces a refusal from Claude", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const sessions = yield* McpProviderSessions.McpProviderSessions;
+    yield* sessions.setLiveToggle(ThreadId.make("t-a"), {
+      projectId,
+      toggle: () => Effect.void,
+      reconnect: () => Effect.fail("refused"),
+    });
+    const error = yield* service
+      .reconnectServer({ threadId: ThreadId.make("t-a"), name: "docs" })
+      .pipe(Effect.flip);
+    assert.equal(error.reason, "failed");
+  }).pipe(Effect.provide(layerFor(fake.query)));
 });
