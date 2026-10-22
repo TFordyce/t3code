@@ -22,6 +22,7 @@ import {
   mcpSignInControl,
   selectMcpServerCheck,
 } from "@t3tools/client-runtime/state/mcp-server-checks";
+import type { ClaudeMcpRow } from "@t3tools/client-runtime/state/claude-mcp-rows";
 import { LockIcon, LockOpenIcon, PlusIcon, XIcon } from "lucide-react";
 import { isLoopbackHost } from "@t3tools/shared/preview";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -64,6 +65,7 @@ import {
   type McpEnvDraftRow,
   type McpServerDraft,
 } from "./McpServersSettings.logic";
+import { ClaudeLiveStatus, ClaudeMcpSection, useClaudeMcpStatus } from "./ClaudeMcpServers";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { SettingsGroup } from "./SettingsGroup";
@@ -127,6 +129,12 @@ function McpServersEnvironmentPanel({
   const canCheck = useAtomValue(serverEnvironment.checkMcpServers.permissionAtom(environmentId));
   const checkServers = useAtomCommand(serverEnvironment.checkMcpServers, {
     label: "check MCP servers",
+  });
+  const claude = useClaudeMcpStatus({
+    environmentId,
+    cwd: projectId === null ? (serverConfig?.cwd ?? null) : null,
+    providers,
+    t3Names: Object.keys(servers).toSorted(),
   });
   const [adding, setAdding] = useState(false);
   const [noticeVisible, setNoticeVisible] = useState(false);
@@ -308,6 +316,7 @@ function McpServersEnvironmentPanel({
             <div className="min-w-0">
               <p className="text-sm font-medium text-foreground">t3-code</p>
               <p className="text-xs text-muted-foreground">T3 Code tools · auto-approved</p>
+              <ClaudeLiveStatus row={claude.view?.builtIn} />
             </div>
             <Badge variant="secondary">Built in</Badge>
           </div>
@@ -336,6 +345,7 @@ function McpServersEnvironmentPanel({
                 existingNames={names}
                 providers={providers}
                 check={selectMcpServerCheck(serverConfig, "global", name)}
+                claude={claude.view?.merged.get(name)}
                 environmentLabel={environmentLabel}
                 canCheck={canCheck}
                 signIn={{ environmentId, target: { scope: "global", name }, canManage }}
@@ -359,6 +369,12 @@ function McpServersEnvironmentPanel({
         ) : null}
         <p className="px-3 text-xs text-muted-foreground sm:px-4">{APPROVAL_NOTE}</p>
       </SettingsSection>
+      <ClaudeMcpSection
+        environmentId={environmentId}
+        cwd={serverConfig?.cwd ?? null}
+        providers={providers}
+        t3Names={names}
+      />
     </SettingsPageContainer>
   );
 }
@@ -378,7 +394,10 @@ function McpServerRow({
   badge,
   onUseEnvironmentConfig,
   signIn,
+  claude,
 }: {
+  /** Claude's own report of this server, where the page has one. */
+  readonly claude?: ClaudeMcpRow | undefined;
   readonly signIn: McpSignInProps;
   readonly name: string;
   readonly config: McpServerConfig;
@@ -416,6 +435,7 @@ function McpServerRow({
               {check === undefined ? null : ` · checked on ${environmentLabel}`}
             </p>
           ) : null}
+          {enabled ? <ClaudeLiveStatus row={claude} /> : null}
           {enabled ? <McpSignInControls {...signIn} config={config} check={check} /> : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
