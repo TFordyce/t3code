@@ -183,6 +183,7 @@ export function RightPanelSurfaceContent(props: {
           environmentId={props.environmentId}
           sessionServers={props.mcp.sessionServers}
           projectId={props.mcp.projectId}
+          threadId={threadRef.threadId}
         />
       );
     case "device":

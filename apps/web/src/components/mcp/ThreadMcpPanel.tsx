@@ -10,12 +10,18 @@ import {
   mcpServerListRows,
   mcpThreadFallback,
 } from "@t3tools/client-runtime/state/mcp-server-checks";
-import type { EnvironmentId, McpSessionServerStatus, ProjectId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  McpSessionServerStatus,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { Badge } from "../ui/badge";
+import { ClaudeMcpReconnectButton } from "../settings/ClaudeMcpReconnectButton";
 import { Button } from "../ui/button";
 import { MCP_STATUS_LABELS, threadMcpRows } from "./ThreadMcpPanel.logic";
 
@@ -35,6 +41,8 @@ export function ThreadMcpPanel(props: {
   readonly sessionServers: ReadonlyArray<McpSessionServerStatus> | null;
   /** The thread's project, whose own servers join the environment's. */
   readonly projectId: ProjectId;
+  /** The thread whose running session a failed server reconnects in. */
+  readonly threadId: ThreadId;
 }) {
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
@@ -79,9 +87,18 @@ export function ThreadMcpPanel(props: {
                   </div>
                 ) : null}
               </div>
-              <Badge variant={STATUS_BADGE_VARIANT[row.status]}>
-                {MCP_STATUS_LABELS[row.status]}
-              </Badge>
+              <div className="flex shrink-0 items-center gap-2">
+                {row.status === "failed" ? (
+                  <ClaudeMcpReconnectButton
+                    environmentId={props.environmentId}
+                    threadId={props.threadId}
+                    name={row.name}
+                  />
+                ) : null}
+                <Badge variant={STATUS_BADGE_VARIANT[row.status]}>
+                  {MCP_STATUS_LABELS[row.status]}
+                </Badge>
+              </div>
             </li>
           ))}
         </ul>

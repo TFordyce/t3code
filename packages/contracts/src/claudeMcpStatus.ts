@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 /** Mirrors the status values the Claude Agent SDK reports for a loaded MCP server. */
 export const ClaudeMcpServerStatusValue = Schema.Literals([
@@ -78,5 +84,30 @@ export class ClaudeMcpToggleError extends Schema.TaggedError<ClaudeMcpToggleErro
 ) {
   override get message(): string {
     return "Could not save the Claude MCP server setting.";
+  }
+}
+
+/** Asks the thread's running Claude process to reconnect one MCP server. */
+export const ReconnectClaudeMcpServerInput = Schema.Struct({
+  threadId: ThreadId,
+  name: TrimmedNonEmptyString,
+});
+export type ReconnectClaudeMcpServerInput = typeof ReconnectClaudeMcpServerInput.Type;
+
+export class ClaudeMcpReconnectError extends Schema.TaggedError<ClaudeMcpReconnectError>()(
+  "ClaudeMcpReconnectError",
+  {
+    /** `noSession`: the thread has no running Claude process to reconnect in. */
+    reason: Schema.Literals(["noSession", "failed"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "noSession":
+        return "No active session. Start a turn in this thread to reconnect MCP servers.";
+      case "failed":
+        return "Claude could not reconnect the MCP server.";
+    }
   }
 }

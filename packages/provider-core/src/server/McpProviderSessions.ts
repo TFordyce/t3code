@@ -34,6 +34,12 @@ const hashHtml = (html: string) => NodeCrypto.createHash("sha256").update(html).
 export interface LiveMcpToggle {
   readonly projectId: ProjectId;
   readonly toggle: (name: string, enabled: boolean) => Effect.Effect<void>;
+  /**
+   * Reconnects one server in the live process. Resolves `false` when the
+   * process has since closed, so nothing was reconnected; fails when Claude
+   * itself refuses.
+   */
+  readonly reconnect: (name: string) => Effect.Effect<boolean, unknown>;
 }
 
 export class McpProviderSessions extends Context.Service<
@@ -48,6 +54,7 @@ export class McpProviderSessions extends Context.Service<
       liveToggle: LiveMcpToggle | undefined,
     ) => Effect.Effect<void>;
     readonly liveToggles: Effect.Effect<ReadonlyArray<LiveMcpToggle>>;
+    readonly liveToggle: (threadId: ThreadId) => Effect.Effect<LiveMcpToggle | undefined>;
     readonly recordHtmlRender: (
       threadId: ThreadId,
       input: { readonly html: string; readonly title: string; readonly height: number },
@@ -115,6 +122,8 @@ const make = Effect.gen(function* () {
         else next.set(threadId, liveToggle);
         return next;
       }),
+    liveToggle: (threadId) =>
+      Ref.get(liveToggles).pipe(Effect.map((current) => current.get(threadId))),
     liveToggles: Ref.get(liveToggles).pipe(Effect.map((current) => [...current.values()])),
     read: (threadId) => Ref.get(sessions).pipe(Effect.map((current) => current.get(threadId))),
     clear: (threadId) =>
