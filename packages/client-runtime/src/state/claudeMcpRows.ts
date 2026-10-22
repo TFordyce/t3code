@@ -22,7 +22,15 @@ export interface ClaudeMcpGroup {
   readonly rows: ReadonlyArray<ClaudeMcpRow>;
 }
 
-/** The user and org levels, in display order. Project and local servers belong to project pages. */
+/** Servers that depend on the project directory Claude was started in; the thread panel shows these. */
+const PROJECT_GROUP_LABELS: ReadonlyArray<readonly [scope: string, label: string]> = [
+  ["project", "Project"],
+  ["local", "Local"],
+  ["dynamic", "Dynamic"],
+  ["agent", "Agent"],
+];
+
+/** The user and org levels, in display order, for Settings. */
 const GROUP_LABELS: ReadonlyArray<readonly [scope: string, label: string]> = [
   ["user", "User"],
   ["claudeai", "claude.ai"],
@@ -91,6 +99,8 @@ export function claudeMcpView(input: {
   readonly builtIn: ClaudeMcpRow | undefined;
   readonly merged: ReadonlyMap<string, ClaudeMcpRow>;
   readonly groups: ReadonlyArray<ClaudeMcpGroup>;
+  /** Project-level servers (project, local, dynamic, agent), for the thread panel. */
+  readonly projectGroups: ReadonlyArray<ClaudeMcpGroup>;
 } {
   const t3Names = new Set(input.t3Names);
   let builtIn: ClaudeMcpRow | undefined;
@@ -101,19 +111,27 @@ export function claudeMcpView(input: {
       builtIn = toRow(report);
     } else if (t3Names.has(report.name)) {
       merged.set(report.name, toRow(report));
-    } else if (GROUP_LABELS.some(([scope]) => scope === report.scope)) {
+    } else if (
+      [...GROUP_LABELS, ...PROJECT_GROUP_LABELS].some(([scope]) => scope === report.scope)
+    ) {
       const rows = byScope.get(report.scope!) ?? [];
       rows.push(withGuidance(report));
       byScope.set(report.scope!, rows);
     }
   }
-  const groups = GROUP_LABELS.flatMap(([scope, label]): ClaudeMcpGroup[] => {
-    const rows = byScope.get(scope);
-    return rows === undefined
-      ? []
-      : [{ scope, label, rows: [...rows].sort((a, b) => a.name.localeCompare(b.name)) }];
-  });
-  return { builtIn, merged, groups };
+  const toGroups = (labels: typeof GROUP_LABELS) =>
+    labels.flatMap(([scope, label]): ClaudeMcpGroup[] => {
+      const rows = byScope.get(scope);
+      return rows === undefined
+        ? []
+        : [{ scope, label, rows: [...rows].sort((a, b) => a.name.localeCompare(b.name)) }];
+    });
+  return {
+    builtIn,
+    merged,
+    groups: toGroups(GROUP_LABELS),
+    projectGroups: toGroups(PROJECT_GROUP_LABELS),
+  };
 }
 
 /**

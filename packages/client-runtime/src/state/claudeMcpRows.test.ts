@@ -42,16 +42,38 @@ describe("claudeMcpView", () => {
     ]);
   });
 
-  it("leaves out project-level servers", () => {
+  it("keeps project-level servers off the Settings groups and in projectGroups", () => {
     const view = claudeMcpView({
       servers: [
         report({ name: "proj", scope: "project" }),
         report({ name: "loc", scope: "local" }),
+        report({ name: "dyn", scope: "dynamic" }),
+        report({ name: "ag", scope: "agent" }),
+        report({ name: "mine", scope: "user" }),
         report({ name: "unknown", scope: undefined }),
       ],
       t3Names: [],
     });
-    expect(view.groups).toEqual([]);
+    expect(view.groups.flatMap((group) => group.rows.map((row) => row.name))).toEqual(["mine"]);
+    expect(
+      view.projectGroups.map((group) => [group.label, group.rows.map((row) => row.name)]),
+    ).toEqual([
+      ["Project", ["proj"]],
+      ["Local", ["loc"]],
+      ["Dynamic", ["dyn"]],
+      ["Agent", ["ag"]],
+    ]);
+  });
+
+  it("leaves user and org servers out of projectGroups", () => {
+    const view = claudeMcpView({
+      servers: [
+        report({ name: "mine", scope: "user" }),
+        report({ name: "figma", scope: "claudeai" }),
+      ],
+      t3Names: [],
+    });
+    expect(view.projectGroups).toEqual([]);
   });
 
   it("tags t3-code as built in instead of listing it in a group", () => {
