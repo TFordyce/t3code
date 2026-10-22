@@ -348,7 +348,11 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
   Layer.mock(ClaudeMcpStatus.ClaudeMcpStatus)({}),
-  Layer.mock(McpServerChecks.McpServerChecks)({}),
+  Layer.mock(McpServerChecks.McpServerChecks)({
+    current: Effect.succeed([]),
+    streamChanges: Stream.empty,
+    ensureChecked: Effect.void,
+  }),
   Layer.mock(McpSignIn.McpSignIn)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(TerminalManager.TerminalManager)({}),
