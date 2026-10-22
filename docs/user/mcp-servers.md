@@ -5,7 +5,8 @@ Add one once in T3 Code and every provider that supports it gets it, so you don'
 edit each provider's own config.
 
 Manage them in **Settings > MCP servers**. T3 Code's built-in `t3-code` server is always
-present, and the list doesn't include it.
+present and shows as built in. For Claude, the page also lists the servers Claude itself has
+loaded. See [Servers Claude has loaded](#servers-claude-has-loaded).
 
 ## Add a server
 
@@ -70,10 +71,51 @@ A server with its own `Authorization` header can't use sign-in. Remove the heade
 Each project override has its own sign-in. A project that just inherits a server uses the
 environment's sign-in.
 
+## Servers Claude has loaded
+
+With Claude, **Settings > MCP servers** also shows the servers Claude reports as loaded for
+you: `claude.ai` connectors, servers from your `~/.claude` configuration, and servers added by
+plugins. Each row shows the server's name, its group (such as `claude.ai`), its status
+(connected, pending, failed, needs sign-in, or disabled), and how many tools it offers. The
+list loads when you open the page and reuses the last result for a few minutes. Use the
+refresh control to check again after changing your configuration. If the check fails or times
+out, the page shows the error with a retry.
+
+A server you added in T3 Code appears as one row with both its settings and Claude's live
+status. Servers only Claude knows about are read-only here: change them in Claude Code, not
+in T3 Code.
+
+This page shows user-level and organization-level servers. Servers tied to a project, such as
+those from the project's `.mcp.json`, appear in the **MCP** panel of a thread in that project
+instead, because they only apply there. Other providers don't report loaded servers, so the
+page says so rather than showing a list.
+
+### Turn a server off and on
+
+Choose **Disable** on a Claude server to stop sessions from loading it. It stays in the list
+as disabled, with **Enable** to turn it back on. This works with no session running, applies
+to new sessions straight away, and also takes effect in a running session without a restart.
+Disabling is a T3 Code setting and never edits Claude's own configuration files. You can also
+disable a server for a single project from that project's settings.
+
+### Reconnect a server
+
+If a server in a running thread has failed, open the thread's **MCP** panel and choose
+**Reconnect**. The panel then re-checks the server so you can see whether it recovered.
+Reconnect needs a running session, so it is unavailable on the settings page, which says why.
+
+### Servers that need sign-in
+
+A Claude server that shows **Needs sign-in** can't be signed in from T3 Code. For a
+`claude.ai` connector, follow the link to claude.ai to connect it. For any other server, run
+`/mcp` in Claude Code and authenticate there. Servers you added in T3 Code keep their
+[sign-in](#sign-in-to-a-server) button.
+
 ## When changes apply
 
-Changes apply to new sessions. A session that is already running keeps the servers it started
-with. The page says so after each save.
+Changes to servers you add in T3 Code apply to new sessions. A session that is already running
+keeps the servers it started with. The page says so after each save. Disabling or enabling a
+Claude server is the exception and applies to running sessions immediately.
 
 OpenCode is the exception. It shares one server per directory, so OpenCode sessions in the
 project pick up changes right away.
@@ -95,7 +137,8 @@ can't run tools without your approval. The built-in `t3-code` server stays auto-
 ## See what a session has
 
 Open a thread's **MCP** panel to see which servers the running session reports, including any
-it skipped and why. If the provider doesn't report server status, the panel shows each server
+it skipped and why. For Claude, the panel also lists the project's own servers and offers
+**Reconnect**. If the provider doesn't report server status, the panel shows each server
 as unknown and falls back to T3 Code's check. **Manage MCP servers** in that panel opens the
 settings page.
 
