@@ -14,7 +14,8 @@ import type { EnvironmentId, McpSessionServerStatus, ProjectId } from "@t3tools/
 import { Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 
-import { serverEnvironment } from "../../state/server";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
+import { ClaudeMcpGroups, useClaudeMcpStatus } from "../settings/ClaudeMcpServers";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { MCP_STATUS_LABELS, threadMcpRows } from "./ThreadMcpPanel.logic";
@@ -29,12 +30,44 @@ const STATUS_BADGE_VARIANT = {
   unknown: "outline",
 } as const;
 
+/** Servers Claude loads because of the project directory (project, local, dynamic, agent). */
+function ClaudeProjectServers(props: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId | null;
+  readonly cwd: string | null;
+  readonly t3Names: ReadonlyArray<string>;
+}) {
+  const providers =
+    useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
+  const { view } = useClaudeMcpStatus({
+    environmentId: props.environmentId,
+    cwd: props.cwd,
+    projectId: props.projectId ?? undefined,
+    providers,
+    t3Names: props.t3Names,
+  });
+  if (view === null || view.projectGroups.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <h3 className="text-xs font-medium text-muted-foreground">Claude project servers</h3>
+      <ClaudeMcpGroups
+        environmentId={props.environmentId}
+        projectId={props.projectId ?? undefined}
+        groups={view.projectGroups}
+      />
+    </div>
+  );
+}
+
 export function ThreadMcpPanel(props: {
   readonly environmentId: EnvironmentId;
   /** The provider session's report, or `null` when it reported nothing. */
   readonly sessionServers: ReadonlyArray<McpSessionServerStatus> | null;
   /** The thread's project, whose own servers join the environment's. */
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
+  /** The project's working directory, where Claude is asked which servers it loads. */
+  readonly cwd: string | null;
 }) {
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
@@ -86,6 +119,12 @@ export function ThreadMcpPanel(props: {
           ))}
         </ul>
       )}
+      <ClaudeProjectServers
+        environmentId={props.environmentId}
+        projectId={props.projectId}
+        cwd={props.cwd}
+        t3Names={rows.map((row) => row.name)}
+      />
     </div>
   );
 }

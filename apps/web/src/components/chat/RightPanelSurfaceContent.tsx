@@ -53,6 +53,7 @@ export interface RightPanelPullRequestProps {
 export interface RightPanelMcpProps {
   readonly sessionServers: ComponentProps<typeof ThreadMcpPanel>["sessionServers"];
   readonly projectId: ProjectId | null;
+  readonly cwd: string | null;
 }
 
 export interface RightPanelFileProps {
@@ -183,6 +184,7 @@ export function RightPanelSurfaceContent(props: {
           environmentId={props.environmentId}
           sessionServers={props.mcp.sessionServers}
           projectId={props.mcp.projectId}
+          cwd={props.mcp.cwd}
         />
       );
     case "device":

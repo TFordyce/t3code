@@ -6411,7 +6411,11 @@ export default function ChatView(props: ChatViewProps) {
         newShortcutLabel: newTerminalShortcutLabel ?? undefined,
         closeShortcutLabel: closeTerminalShortcutLabel ?? undefined,
       }}
-      mcp={{ sessionServers: threadMcpSessionServers, projectId: activeThread.projectId }}
+      mcp={{
+        sessionServers: threadMcpSessionServers,
+        projectId: activeThread.projectId,
+        cwd: activeProjectCwd,
+      }}
       pullRequest={{
         capabilityKnown: pullRequestsCapabilityKnown,
         supported: supportsPullRequests,

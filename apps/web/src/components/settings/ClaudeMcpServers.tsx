@@ -5,10 +5,11 @@
  *
  * @module ClaudeMcpServers
  */
-import type { EnvironmentId, ServerProvider } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ServerProvider } from "@t3tools/contracts";
 import {
   claudeMcpView,
   unreportedProviderNames,
+  type ClaudeMcpGroup,
   type ClaudeMcpRow,
 } from "@t3tools/client-runtime/state/claude-mcp-rows";
 
@@ -17,6 +18,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
+import { ClaudeMcpToggleButton } from "./ClaudeMcpToggleButton";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsSection } from "./settingsLayout";
 
@@ -36,13 +38,20 @@ const hasClaudeProvider = (providers: ReadonlyArray<ServerProvider>) =>
 export function useClaudeMcpStatus(input: {
   readonly environmentId: EnvironmentId;
   readonly cwd: string | null;
+  /** The thread's project, so the probe sees its overrides; absent for the environment-wide list. */
+  readonly projectId?: ProjectId | undefined;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly t3Names: ReadonlyArray<string>;
 }) {
-  const { environmentId, cwd, providers, t3Names } = input;
+  const { environmentId, cwd, projectId, providers, t3Names } = input;
   const probes = cwd !== null && hasClaudeProvider(providers);
   const query = useEnvironmentQuery(
-    probes ? serverEnvironment.claudeMcpStatus({ environmentId, input: { cwd } }) : null,
+    probes
+      ? serverEnvironment.claudeMcpStatus({
+          environmentId,
+          input: { cwd, ...(projectId === undefined ? {} : { projectId }) },
+        })
+      : null,
   );
   const servers = query.data?.servers;
   const view = servers === undefined ? null : claudeMcpView({ servers, t3Names });
@@ -72,6 +81,56 @@ export function ClaudeLiveStatus({ row }: { readonly row: ClaudeMcpRow | undefin
     <div>
       <Tone row={row} />
     </div>
+  );
+}
+
+/** Claude-only servers grouped by scope, each with its Enable/Disable control. */
+export function ClaudeMcpGroups(props: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId?: ProjectId | undefined;
+  readonly groups: ReadonlyArray<ClaudeMcpGroup>;
+}) {
+  return (
+    <>
+      {props.groups.map((group) => (
+        <div key={group.scope}>
+          <h3 className="px-3 pt-3 text-xs font-medium text-muted-foreground sm:px-4">
+            {group.label}
+          </h3>
+          <SettingsGroup variant="plain">
+            {group.rows.map((row) => (
+              <div
+                key={row.name}
+                className="flex items-center justify-between gap-3 px-3 py-2 sm:px-4"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">{row.name}</p>
+                  <Tone row={row} />
+                  {row.guidance?.kind === "link" ? (
+                    <a
+                      className="text-xs text-info-foreground underline"
+                      href={row.guidance.href}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {row.guidance.label}
+                    </a>
+                  ) : row.guidance ? (
+                    <p className="text-xs text-muted-foreground">{row.guidance.text}</p>
+                  ) : null}
+                </div>
+                <ClaudeMcpToggleButton
+                  environmentId={props.environmentId}
+                  projectId={props.projectId}
+                  name={row.name}
+                  status={row.status}
+                />
+              </div>
+            ))}
+          </SettingsGroup>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -114,33 +173,7 @@ export function ClaudeMcpSection(props: {
           </Alert>
         </div>
       ) : null}
-      {view?.groups.map((group) => (
-        <div key={group.scope}>
-          <h3 className="px-3 pt-3 text-xs font-medium text-muted-foreground sm:px-4">
-            {group.label}
-          </h3>
-          <SettingsGroup variant="plain">
-            {group.rows.map((row) => (
-              <div key={row.name} className="px-3 py-2 sm:px-4">
-                <p className="truncate text-sm font-medium text-foreground">{row.name}</p>
-                <Tone row={row} />
-                {row.guidance?.kind === "link" ? (
-                  <a
-                    className="text-xs text-info-foreground underline"
-                    href={row.guidance.href}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {row.guidance.label}
-                  </a>
-                ) : row.guidance ? (
-                  <p className="text-xs text-muted-foreground">{row.guidance.text}</p>
-                ) : null}
-              </div>
-            ))}
-          </SettingsGroup>
-        </div>
-      ))}
+      {view ? <ClaudeMcpGroups environmentId={props.environmentId} groups={view.groups} /> : null}
       {view !== null && view.groups.length === 0 ? (
         <p className="px-3 py-3 text-sm text-muted-foreground sm:px-4">
           Claude has no user or org servers loaded.
