@@ -39,7 +39,7 @@ export interface LiveMcpToggle {
    * process has since closed, so nothing was reconnected; fails when Claude
    * itself refuses.
    */
-  readonly reconnect: (name: string) => Effect.Effect<boolean, unknown>;
+  readonly reconnect: (name: string) => Effect.Effect<boolean, { readonly message: string }>;
 }
 
 export class McpProviderSessions extends Context.Service<

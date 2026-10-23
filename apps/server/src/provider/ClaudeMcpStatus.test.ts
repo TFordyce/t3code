@@ -364,7 +364,7 @@ it.effect("reconnect surfaces a refusal from Claude", () => {
     yield* sessions.setLiveToggle(ThreadId.make("t-a"), {
       projectId,
       toggle: () => Effect.void,
-      reconnect: () => Effect.fail("refused"),
+      reconnect: () => Effect.fail({ message: "refused" }),
     });
     const error = yield* service
       .reconnectServer({ threadId: ThreadId.make("t-a"), name: "docs" })

@@ -17,7 +17,6 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { useMemo } from "react";
 
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { ClaudeMcpGroups, useClaudeMcpStatus } from "../settings/ClaudeMcpServers";
@@ -49,13 +48,11 @@ export function ThreadMcpPanel(props: {
 }) {
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
-  const rows = useMemo(() => {
-    const fallback =
-      settings === null || settings === undefined
-        ? { configuredNames: [] }
-        : mcpThreadFallback(mcpServerListRows({ settings, config, projectId: props.projectId }));
-    return threadMcpRows({ sessionServers: props.sessionServers, ...fallback });
-  }, [config, props.projectId, props.sessionServers, settings]);
+  const fallback =
+    settings === null || settings === undefined
+      ? { configuredNames: [] }
+      : mcpThreadFallback(mcpServerListRows({ settings, config, projectId: props.projectId }));
+  const rows = threadMcpRows({ sessionServers: props.sessionServers, ...fallback });
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ??
     EMPTY_SERVER_PROVIDERS;

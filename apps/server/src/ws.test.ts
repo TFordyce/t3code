@@ -292,6 +292,16 @@ it.live.each(["thread", "shell"] as const)(
 );
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
+const layerMcpConfigRpcServices = Layer.mergeAll(
+  Layer.mock(ClaudeMcpStatus.ClaudeMcpStatus)({}),
+  Layer.mock(McpServerChecks.McpServerChecks)({
+    current: Effect.succeed([]),
+    streamChanges: Stream.empty,
+    ensureChecked: Effect.void,
+  }),
+  Layer.mock(McpSignIn.McpSignIn)({}),
+);
+
 const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(WorkspacePaths.WorkspacePaths)({}),
@@ -349,13 +359,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
-  Layer.mock(ClaudeMcpStatus.ClaudeMcpStatus)({}),
-  Layer.mock(McpServerChecks.McpServerChecks)({
-    current: Effect.succeed([]),
-    streamChanges: Stream.empty,
-    ensureChecked: Effect.void,
-  }),
-  Layer.mock(McpSignIn.McpSignIn)({}),
+  layerMcpConfigRpcServices,
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(TerminalManager.TerminalManager)({}),
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
