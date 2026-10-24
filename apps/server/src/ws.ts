@@ -2413,6 +2413,7 @@ export const layerWsRpc = (
         [WS_METHODS.serverCheckMcpServers]: ({ targets }) =>
           mcpServerChecks.check(targets).pipe(Effect.as({})),
         [WS_METHODS.serverGetClaudeMcpStatus]: (input) => claudeMcpStatus.probe(input),
+        [WS_METHODS.serverGetClaudeMcpServerDetail]: (input) => claudeMcpStatus.detail(input),
         [WS_METHODS.serverSetClaudeMcpServerEnabled]: (input) =>
           claudeMcpStatus.setServerEnabled(input).pipe(Effect.as({})),
         [WS_METHODS.serverReconnectClaudeMcpServer]: (input) =>

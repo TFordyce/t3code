@@ -1,7 +1,7 @@
-import type { ClaudeMcpServerReport } from "@t3tools/contracts";
+import type { ClaudeMcpServerDetail, ClaudeMcpServerReport } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { claudeMcpView, unreportedProviderNames } from "./claudeMcpRows.ts";
+import { claudeMcpDetailView, claudeMcpView, unreportedProviderNames } from "./claudeMcpRows.ts";
 
 const report = (overrides: Partial<ClaudeMcpServerReport> = {}): ClaudeMcpServerReport => ({
   name: "docs",
@@ -159,5 +159,123 @@ describe("unreportedProviderNames", () => {
         { driver: "grok", enabled: true, displayName: "Grok", userMcpTransports: [] },
       ]),
     ).toEqual(["Codex", "opencode"]);
+  });
+});
+
+const detail = (overrides: Partial<ClaudeMcpServerDetail> = {}): ClaudeMcpServerDetail => ({
+  name: "docs",
+  status: "connected",
+  toolCount: 2,
+  scope: "user",
+  source: "user",
+  transport: "http",
+  url: "https://mcp.example.com/mcp",
+  serverInfo: { name: "Docs MCP", version: "1.2.0" },
+  tools: [],
+  ...overrides,
+});
+
+const detailResult = (server: ClaudeMcpServerDetail | null) => ({
+  server,
+  checkedAt: "2026-10-24T10:00:00.000Z",
+});
+
+describe("claudeMcpDetailView", () => {
+  it("is loading while the first probe runs", () => {
+    expect(claudeMcpDetailView({ data: null, isPending: true, error: null })).toEqual({
+      kind: "loading",
+    });
+  });
+
+  it("shows a probe error when there is nothing to show yet", () => {
+    expect(
+      claudeMcpDetailView({ data: null, isPending: false, error: "Claude could not report" }),
+    ).toEqual({ kind: "error", message: "Claude could not report" });
+  });
+
+  it("says Claude no longer reports a server that has disappeared", () => {
+    expect(
+      claudeMcpDetailView({ data: detailResult(null), isPending: false, error: null }),
+    ).toEqual({ kind: "missing", message: "Claude no longer reports this server" });
+  });
+
+  it("describes a connected remote server with its version, URL, scope and tool count", () => {
+    const view = claudeMcpDetailView({
+      data: detailResult(detail()),
+      isPending: false,
+      error: null,
+    });
+    expect(view).toEqual({
+      kind: "server",
+      refreshing: false,
+      name: "docs",
+      status: "connected",
+      statusText: "Connected",
+      tone: "success",
+      serverInfo: "Docs MCP 1.2.0",
+      transport: "HTTP",
+      target: "https://mcp.example.com/mcp",
+      location: "User",
+      toolCountText: "2 tools",
+      tools: [],
+    });
+  });
+
+  it("names a stdio server's command and adds the source when it differs from the scope", () => {
+    const view = claudeMcpDetailView({
+      data: detailResult(
+        detail({
+          transport: "stdio",
+          url: undefined,
+          command: "npx",
+          scope: "user",
+          source: "plugin",
+          serverInfo: undefined,
+          toolCount: 1,
+        }),
+      ),
+      isPending: false,
+      error: null,
+    });
+    expect(view).toMatchObject({
+      transport: "stdio",
+      target: "npx",
+      location: "User (from Plugin)",
+      toolCountText: "1 tool",
+    });
+    expect(view).not.toHaveProperty("serverInfo");
+  });
+
+  it("shows a failed server's error and hides its version", () => {
+    const view = claudeMcpDetailView({
+      data: detailResult(detail({ status: "failed", error: "401 Unauthorized", toolCount: 0 })),
+      isPending: false,
+      error: null,
+    });
+    expect(view).toMatchObject({
+      statusText: "Failed",
+      tone: "error",
+      error: "401 Unauthorized",
+      toolCountText: "0 tools",
+    });
+    expect(view).not.toHaveProperty("serverInfo");
+  });
+
+  it("keeps showing the last answer, marked refreshing, while Claude is asked again", () => {
+    expect(
+      claudeMcpDetailView({ data: detailResult(detail()), isPending: true, error: null }),
+    ).toMatchObject({ kind: "server", refreshing: true });
+  });
+
+  it("labels a claude.ai connector by transport and scope", () => {
+    expect(
+      claudeMcpDetailView({
+        data: detailResult(
+          detail({ transport: "claudeai", scope: "claudeai", source: "claudeai" }),
+        ),
+        isPending: false,
+        error: null,
+      }),
+    ).toMatchObject({ transport: "claude.ai", location: "claude.ai" });
   });
 });

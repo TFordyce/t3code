@@ -12,6 +12,7 @@ import {
   type ClaudeMcpGroup,
   type ClaudeMcpRow,
 } from "@t3tools/client-runtime/state/claude-mcp-rows";
+import { useState } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
@@ -19,6 +20,7 @@ import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { ClaudeMcpReconnectButton } from "./ClaudeMcpReconnectButton";
+import { ClaudeMcpServerDialog } from "./ClaudeMcpServerDialog";
 import { ClaudeMcpToggleButton } from "./ClaudeMcpToggleButton";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsSection } from "./settingsLayout";
@@ -104,17 +106,30 @@ export function ClaudeLiveStatus(props: {
 
 /**
  * Claude-only servers grouped by scope, each with its Enable/Disable control
- * and, when failed, Reconnect (disabled without a `threadId`).
+ * and, when failed, Reconnect (disabled without a `threadId`). With `cwd`, the
+ * directory the list was probed in, clicking a row opens its detail dialog.
  */
 export function ClaudeMcpGroups(props: {
   readonly environmentId: EnvironmentId;
+  readonly cwd?: string | undefined;
   readonly projectId?: ProjectId | undefined;
   readonly threadId?: ThreadId | undefined;
   readonly onReconnected?: (() => void) | undefined;
   readonly groups: ReadonlyArray<ClaudeMcpGroup>;
 }) {
+  const [openName, setOpenName] = useState<string | null>(null);
+  const { cwd } = props;
   return (
     <>
+      {cwd === undefined ? null : (
+        <ClaudeMcpServerDialog
+          environmentId={props.environmentId}
+          cwd={cwd}
+          projectId={props.projectId}
+          name={openName}
+          onClose={() => setOpenName(null)}
+        />
+      )}
       {props.groups.map((group) => (
         <div key={group.scope}>
           <h3 className="px-3 pt-3 text-xs font-medium text-muted-foreground sm:px-4">
@@ -127,8 +142,23 @@ export function ClaudeMcpGroups(props: {
                 className="flex items-center justify-between gap-3 px-3 py-2 sm:px-4"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-foreground">{row.name}</p>
-                  <Tone row={row} />
+                  {cwd === undefined ? (
+                    <>
+                      <p className="truncate text-sm font-medium text-foreground">{row.name}</p>
+                      <Tone row={row} />
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="block w-full min-w-0 cursor-pointer text-left"
+                      onClick={() => setOpenName(row.name)}
+                    >
+                      <p className="truncate text-sm font-medium text-foreground hover:underline">
+                        {row.name}
+                      </p>
+                      <Tone row={row} />
+                    </button>
+                  )}
                   {row.guidance?.kind === "link" ? (
                     <a
                       className="text-xs text-info-foreground underline"
@@ -209,6 +239,7 @@ export function ClaudeMcpSection(props: {
       {view ? (
         <ClaudeMcpGroups
           environmentId={props.environmentId}
+          cwd={props.cwd ?? undefined}
           groups={view.groups}
           onReconnected={refresh}
         />

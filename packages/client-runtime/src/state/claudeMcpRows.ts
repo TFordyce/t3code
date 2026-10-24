@@ -1,4 +1,10 @@
-import { BUILT_IN_MCP_SERVER_NAME, type ClaudeMcpServerReport } from "@t3tools/contracts";
+import {
+  BUILT_IN_MCP_SERVER_NAME,
+  type ClaudeMcpServerDetail,
+  type ClaudeMcpServerDetailResult,
+  type ClaudeMcpServerReport,
+  type ClaudeMcpTransportKind,
+} from "@t3tools/contracts";
 
 export type ClaudeMcpTone = "neutral" | "success" | "warning" | "error";
 
@@ -166,4 +172,112 @@ export function unreportedProviderNames(
         .map((provider) => provider.displayName ?? provider.driver),
     ),
   ];
+}
+
+const STATUS_TEXT: Record<ClaudeMcpServerReport["status"], string> = {
+  connected: "Connected",
+  pending: "Connecting...",
+  failed: "Failed",
+  "needs-auth": "Needs sign-in",
+  disabled: "Disabled",
+};
+
+const TRANSPORT_LABELS: Record<ClaudeMcpTransportKind, string> = {
+  stdio: "stdio",
+  http: "HTTP",
+  sse: "SSE",
+  claudeai: "claude.ai",
+  sdk: "SDK",
+};
+
+const SCOPE_LABELS: Record<string, string> = {
+  user: "User",
+  project: "Project",
+  local: "Local",
+  dynamic: "Dynamic",
+  agent: "Agent",
+  claudeai: "claude.ai",
+  managed: "Managed",
+  enterprise: "Enterprise",
+  plugin: "Plugin",
+  sdk: "SDK",
+};
+
+const scopeLabel = (scope: string) => SCOPE_LABELS[scope] ?? scope;
+
+function locationOf(server: ClaudeMcpServerDetail): string | undefined {
+  if (server.scope === undefined) {
+    return server.source === undefined ? undefined : scopeLabel(server.source);
+  }
+  const scope = scopeLabel(server.scope);
+  return server.source === undefined || server.source === server.scope
+    ? scope
+    : `${scope} (from ${scopeLabel(server.source)})`;
+}
+
+/** What the Claude MCP server detail dialog shows, from its detail query. */
+export type ClaudeMcpDetailView =
+  | { readonly kind: "loading" }
+  | { readonly kind: "error"; readonly message: string }
+  /** The server dropped out of Claude's report; the dialog offers only Close. */
+  | { readonly kind: "missing"; readonly message: string }
+  | {
+      readonly kind: "server";
+      /** Claude is being asked again; the fields are the last answer. */
+      readonly refreshing: boolean;
+      readonly name: string;
+      readonly status: ClaudeMcpServerReport["status"];
+      readonly statusText: string;
+      readonly tone: ClaudeMcpTone;
+      readonly error?: string;
+      /** The server's own name and version, only while connected. */
+      readonly serverInfo?: string;
+      readonly transport?: string;
+      /** The query-stripped URL for remote servers, or the stdio command name. */
+      readonly target?: string;
+      /** The config scope, plus the source when it differs. */
+      readonly location?: string;
+      readonly toolCountText: string;
+      readonly tools: ClaudeMcpServerDetail["tools"];
+    };
+
+/**
+ * The detail dialog's state. A server Claude stops reporting turns into
+ * `missing` rather than vanishing; an earlier answer stays on screen (marked
+ * `refreshing`) while a new probe runs.
+ */
+export function claudeMcpDetailView(input: {
+  readonly data: ClaudeMcpServerDetailResult | null | undefined;
+  readonly isPending: boolean;
+  readonly error: string | null;
+}): ClaudeMcpDetailView {
+  const { data } = input;
+  if (data === null || data === undefined) {
+    return input.error !== null && !input.isPending
+      ? { kind: "error", message: input.error }
+      : { kind: "loading" };
+  }
+  const server = data.server;
+  if (server === null) {
+    return { kind: "missing", message: "Claude no longer reports this server" };
+  }
+  const target = server.url ?? server.command;
+  const location = locationOf(server);
+  return {
+    kind: "server",
+    refreshing: input.isPending,
+    name: server.name,
+    status: server.status,
+    statusText: STATUS_TEXT[server.status],
+    tone: TONES[server.status],
+    ...(server.error === undefined || server.error.length === 0 ? {} : { error: server.error }),
+    ...(server.status !== "connected" || server.serverInfo === undefined
+      ? {}
+      : { serverInfo: `${server.serverInfo.name} ${server.serverInfo.version}` }),
+    ...(server.transport === undefined ? {} : { transport: TRANSPORT_LABELS[server.transport] }),
+    ...(target === undefined ? {} : { target }),
+    ...(location === undefined ? {} : { location }),
+    toolCountText: `${server.toolCount} ${server.toolCount === 1 ? "tool" : "tools"}`,
+    tools: server.tools,
+  };
 }

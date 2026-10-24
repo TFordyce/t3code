@@ -11,6 +11,8 @@ import { render } from "../../../test/render";
 
 const probe = vi.hoisted(() => ({
   claudeMcpStatus: vi.fn((target: unknown) => target),
+  claudeMcpServerDetail: vi.fn((target: unknown) => ({ detail: target })),
+  detail: null as unknown,
   refresh: vi.fn(),
   view: {
     data: null as unknown,
@@ -27,6 +29,7 @@ vi.mock(import("../../state/server"), async (original) => {
     serverEnvironment: {
       ...actual.serverEnvironment,
       claudeMcpStatus: probe.claudeMcpStatus as never,
+      claudeMcpServerDetail: probe.claudeMcpServerDetail as never,
       reconnectClaudeMcpServer: {
         ...actual.serverEnvironment.reconnectClaudeMcpServer,
         permissionAtom: () => Atom.make(true),
@@ -40,11 +43,14 @@ vi.mock(import("../../state/server"), async (original) => {
 });
 vi.mock(import("../../state/query"), async (original) => ({
   ...(await original()),
-  useEnvironmentQuery: ((atom: unknown) => ({
-    ...probe.view,
-    data: atom === null ? null : probe.view.data,
-    refresh: probe.refresh,
-  })) as never,
+  useEnvironmentQuery: ((atom: unknown) =>
+    atom !== null && typeof atom === "object" && "detail" in atom
+      ? { data: probe.detail, error: null, isPending: false, refresh: probe.refresh }
+      : {
+          ...probe.view,
+          data: atom === null ? null : probe.view.data,
+          refresh: probe.refresh,
+        }) as never,
 }));
 
 import { ClaudeMcpSection } from "./ClaudeMcpServers";
@@ -123,5 +129,38 @@ describe("ClaudeMcpSection", () => {
     await expect.element(reconnect).toBeDisabled();
     await expect.element(reconnect).toHaveAttribute("title", "No active session");
     await expect.element(screen.getByRole("button", { name: "Enable" })).toBeVisible();
+  });
+
+  it("opens a Claude-only server's detail when its row is clicked", async () => {
+    probe.view = {
+      data: { servers: [{ name: "docs", status: "connected", toolCount: 2, scope: "user" }] },
+      error: null,
+      isPending: false,
+    };
+    probe.detail = {
+      server: {
+        name: "docs",
+        status: "connected",
+        toolCount: 2,
+        scope: "user",
+        transport: "http",
+        url: "https://mcp.example.com/mcp",
+        serverInfo: { name: "Docs MCP", version: "1.2.0" },
+        tools: [],
+      },
+      checkedAt: "2026-10-24T10:00:00.000Z",
+    };
+    const screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: /docs/ }));
+
+    expect(probe.claudeMcpServerDetail).toHaveBeenCalledWith({
+      environmentId,
+      input: { cwd: "/home/me", name: "docs" },
+    });
+    const dialog = screen.getByRole("dialog");
+    await expect.element(dialog.getByText("Docs MCP 1.2.0")).toBeVisible();
+    await expect.element(dialog.getByText("https://mcp.example.com/mcp")).toBeVisible();
+    await expect.element(dialog.getByText("2 tools")).toBeVisible();
   });
 });
