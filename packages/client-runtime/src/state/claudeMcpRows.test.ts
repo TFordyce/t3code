@@ -217,7 +217,9 @@ describe("claudeMcpDetailView", () => {
       target: "https://mcp.example.com/mcp",
       location: "User",
       toolCountText: "2 tools",
+      guidance: { kind: "text", text: "Run /mcp in Claude Code to clear sign-in." },
       tools: [],
+      actions: ["reconnect", "disable"],
     });
   });
 
@@ -277,5 +279,82 @@ describe("claudeMcpDetailView", () => {
         error: null,
       }),
     ).toMatchObject({ transport: "claude.ai", location: "claude.ai" });
+  });
+});
+
+describe("claudeMcpDetailView actions", () => {
+  const actionsFor = (status: ClaudeMcpServerDetail["status"]) => {
+    const view = claudeMcpDetailView({
+      data: detailResult(detail({ status })),
+      isPending: false,
+      error: null,
+    });
+    return view.kind === "server" ? view.actions : undefined;
+  };
+
+  it("offers Reconnect and Disable for every server that is not disabled", () => {
+    for (const status of ["connected", "pending", "failed", "needs-auth"] as const) {
+      expect(actionsFor(status)).toEqual(["reconnect", "disable"]);
+    }
+  });
+
+  it("offers only Enable for a disabled server", () => {
+    expect(actionsFor("disabled")).toEqual(["enable"]);
+  });
+});
+
+describe("claudeMcpDetailView sign-in guidance", () => {
+  const guidanceFor = (overrides: Partial<ClaudeMcpServerDetail>) => {
+    const view = claudeMcpDetailView({
+      data: detailResult(detail(overrides)),
+      isPending: false,
+      error: null,
+    });
+    return view.kind === "server" ? (view.guidance ?? null) : undefined;
+  };
+  const manageOnClaudeAi = {
+    kind: "link",
+    label: "Manage on claude.ai",
+    href: "https://claude.ai/settings/connectors",
+  };
+
+  it("links a claude.ai connector to claude.ai whatever its status", () => {
+    for (const status of ["connected", "pending", "failed", "needs-auth", "disabled"] as const) {
+      expect(guidanceFor({ transport: "claudeai", scope: "claudeai", status })).toEqual(
+        manageOnClaudeAi,
+      );
+    }
+  });
+
+  it("tells a remote server that needs sign-in to run /mcp to sign in", () => {
+    for (const transport of ["http", "sse"] as const) {
+      expect(guidanceFor({ transport, status: "needs-auth" })).toEqual({
+        kind: "text",
+        text: "Run /mcp in Claude Code to sign in.",
+      });
+    }
+  });
+
+  it("tells a connected remote server how to clear its sign-in", () => {
+    for (const transport of ["http", "sse"] as const) {
+      expect(guidanceFor({ transport, status: "connected" })).toEqual({
+        kind: "text",
+        text: "Run /mcp in Claude Code to clear sign-in.",
+      });
+    }
+  });
+
+  it("gives a remote server no sign-in line while it is connecting, failed or disabled", () => {
+    for (const status of ["pending", "failed", "disabled"] as const) {
+      expect(guidanceFor({ transport: "http", status })).toBeNull();
+    }
+  });
+
+  it("never gives a stdio or SDK server sign-in guidance", () => {
+    for (const transport of ["stdio", "sdk"] as const) {
+      for (const status of ["connected", "needs-auth"] as const) {
+        expect(guidanceFor({ transport, status, url: undefined })).toBeNull();
+      }
+    }
   });
 });

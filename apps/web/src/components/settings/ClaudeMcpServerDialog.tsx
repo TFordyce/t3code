@@ -1,13 +1,16 @@
 /**
  * What Claude reports about one of its MCP servers, opened from a Claude-only
  * row. The detail is read from the server's cached probe (probing on a miss)
- * and follows the list in place when it is refreshed.
+ * and follows the list in place when it is refreshed, so Reconnect and
+ * Enable/Disable (both followed by `onReconnected`, a fresh probe) update the
+ * open dialog.
  *
  * @module ClaudeMcpServerDialog
  */
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import {
   claudeMcpDetailView,
+  type ClaudeMcpGuidance,
   type ClaudeMcpTone,
 } from "@t3tools/client-runtime/state/claude-mcp-rows";
 import type { ReactNode } from "react";
@@ -25,6 +28,8 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Spinner } from "../ui/spinner";
+import { ClaudeMcpReconnectButton } from "./ClaudeMcpReconnectButton";
+import { ClaudeMcpToggleButton } from "./ClaudeMcpToggleButton";
 
 const TONE_CLASS: Record<ClaudeMcpTone, string> = {
   success: "text-success-foreground",
@@ -42,12 +47,14 @@ function Field(props: { readonly label: string; readonly children: ReactNode }) 
   );
 }
 
-function ClaudeMcpServerDetail(props: {
+interface DetailTarget {
   readonly environmentId: EnvironmentId;
   readonly cwd: string;
   readonly projectId?: ProjectId | undefined;
   readonly name: string;
-}) {
+}
+
+function useClaudeMcpDetail(props: DetailTarget) {
   const query = useEnvironmentQuery(
     serverEnvironment.claudeMcpServerDetail({
       environmentId: props.environmentId,
@@ -58,7 +65,26 @@ function ClaudeMcpServerDetail(props: {
       },
     }),
   );
-  const view = claudeMcpDetailView(query);
+  return claudeMcpDetailView(query);
+}
+
+function Guidance({ guidance }: { readonly guidance: ClaudeMcpGuidance }) {
+  return guidance.kind === "link" ? (
+    <a
+      className="block text-xs text-info-foreground underline"
+      href={guidance.href}
+      target="_blank"
+      rel="noreferrer"
+    >
+      {guidance.label}
+    </a>
+  ) : (
+    <span className="block text-xs text-muted-foreground">{guidance.text}</span>
+  );
+}
+
+function ClaudeMcpServerDetail(props: DetailTarget) {
+  const view = useClaudeMcpDetail(props);
   switch (view.kind) {
     case "loading":
       return (
@@ -81,6 +107,7 @@ function ClaudeMcpServerDetail(props: {
             {view.error === undefined ? null : (
               <span className="block text-xs text-destructive">{view.error}</span>
             )}
+            {view.guidance === undefined ? null : <Guidance guidance={view.guidance} />}
           </Field>
           {view.serverInfo === undefined ? null : <Field label="Server">{view.serverInfo}</Field>}
           {view.transport === undefined ? null : (
@@ -98,10 +125,48 @@ function ClaudeMcpServerDetail(props: {
   }
 }
 
+/** Reconnect and Enable/Disable for the open server, as the view-model offers them. */
+function ClaudeMcpServerActions(
+  props: DetailTarget & {
+    readonly threadId?: ThreadId | undefined;
+    readonly onReconnected?: (() => void) | undefined;
+  },
+) {
+  const view = useClaudeMcpDetail(props);
+  if (view.kind !== "server") return null;
+  return (
+    <>
+      {view.actions.includes("reconnect") ? (
+        <ClaudeMcpReconnectButton
+          environmentId={props.environmentId}
+          threadId={props.threadId}
+          name={view.name}
+          onReconnected={props.onReconnected}
+          size="default"
+        />
+      ) : null}
+      {view.actions.includes("enable") || view.actions.includes("disable") ? (
+        <ClaudeMcpToggleButton
+          environmentId={props.environmentId}
+          projectId={props.projectId}
+          name={view.name}
+          status={view.status}
+          onToggled={props.onReconnected}
+          size="default"
+        />
+      ) : null}
+    </>
+  );
+}
+
 export function ClaudeMcpServerDialog(props: {
   readonly environmentId: EnvironmentId;
   readonly cwd: string;
   readonly projectId?: ProjectId | undefined;
+  /** The thread whose running Claude process Reconnect reaches; absent on Settings. */
+  readonly threadId?: ThreadId | undefined;
+  /** Asks Claude again; runs after Reconnect or a toggle, and is Reconnect without a thread. */
+  readonly onReconnected?: (() => void) | undefined;
   /** The open server's name; null keeps the dialog closed. */
   readonly name: string | null;
   readonly onClose: () => void;
@@ -123,6 +188,16 @@ export function ClaudeMcpServerDialog(props: {
           )}
         </DialogPanel>
         <DialogFooter variant="bare">
+          {props.name === null ? null : (
+            <ClaudeMcpServerActions
+              environmentId={props.environmentId}
+              cwd={props.cwd}
+              projectId={props.projectId}
+              threadId={props.threadId}
+              onReconnected={props.onReconnected}
+              name={props.name}
+            />
+          )}
           <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
         </DialogFooter>
       </DialogPopup>

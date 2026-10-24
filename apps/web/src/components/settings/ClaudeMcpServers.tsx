@@ -93,7 +93,7 @@ function Tone({ row }: { readonly row: ClaudeMcpRow }) {
 
 /**
  * Claude's live status line, as it sits under a T3-configured or built-in row.
- * A failed server also gets Reconnect, disabled without a `threadId`.
+ * A failed server also gets Reconnect.
  */
 export function ClaudeLiveStatus(props: {
   readonly row: ClaudeMcpRow | undefined;
@@ -120,8 +120,10 @@ export function ClaudeLiveStatus(props: {
 
 /**
  * Claude-only servers grouped by scope, each with its Enable/Disable control
- * and, when failed, Reconnect (disabled without a `threadId`). With `cwd`, the
- * directory the list was probed in, clicking a row opens its detail dialog.
+ * and, when failed, Reconnect. `onReconnected` asks Claude again; it runs after
+ * a reconnect or toggle, and is Reconnect itself without a `threadId`. With
+ * `cwd`, the directory the list was probed in, clicking a row opens its detail
+ * dialog.
  */
 export function ClaudeMcpGroups(props: {
   readonly environmentId: EnvironmentId;
@@ -140,6 +142,8 @@ export function ClaudeMcpGroups(props: {
           environmentId={props.environmentId}
           cwd={cwd}
           projectId={props.projectId}
+          threadId={props.threadId}
+          onReconnected={props.onReconnected}
           name={openName}
           onClose={() => setOpenName(null)}
         />
@@ -200,6 +204,7 @@ export function ClaudeMcpGroups(props: {
                     projectId={props.projectId}
                     name={row.name}
                     status={row.status}
+                    onToggled={props.onReconnected}
                   />
                 </div>
               </div>

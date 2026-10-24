@@ -84,15 +84,26 @@ const toRow = (report: ClaudeMcpServerReport): ClaudeMcpRow => ({
   tone: TONES[report.status],
 });
 
+const MANAGE_ON_CLAUDE_AI: ClaudeMcpGuidance = {
+  kind: "link",
+  label: "Manage on claude.ai",
+  href: CLAUDE_AI_CONNECTORS_URL,
+};
+const SIGN_IN_WITH_MCP: ClaudeMcpGuidance = {
+  kind: "text",
+  text: "Run /mcp in Claude Code to sign in.",
+};
+const CLEAR_SIGN_IN_WITH_MCP: ClaudeMcpGuidance = {
+  kind: "text",
+  text: "Run /mcp in Claude Code to clear sign-in.",
+};
+
 const withGuidance = (report: ClaudeMcpServerReport): ClaudeMcpRow => {
   const row = toRow(report);
   if (report.status !== "needs-auth") return row;
   return {
     ...row,
-    guidance:
-      report.scope === "claudeai"
-        ? { kind: "link", label: "Manage on claude.ai", href: CLAUDE_AI_CONNECTORS_URL }
-        : { kind: "text", text: "Run /mcp in Claude Code to sign in." },
+    guidance: report.scope === "claudeai" ? MANAGE_ON_CLAUDE_AI : SIGN_IN_WITH_MCP,
   };
 };
 
@@ -215,6 +226,36 @@ function locationOf(server: ClaudeMcpServerDetail): string | undefined {
     : `${scope} (from ${scopeLabel(server.source)})`;
 }
 
+/**
+ * A control the detail dialog offers. Reconnect is a fresh probe on Settings
+ * and a live reconnect of the running Claude process in a thread; the toggle
+ * uses the same project-or-environment scope as the row button.
+ */
+export type ClaudeMcpDetailAction = "reconnect" | "enable" | "disable";
+
+const actionsFor = (
+  status: ClaudeMcpServerReport["status"],
+): ReadonlyArray<ClaudeMcpDetailAction> =>
+  status === "disabled" ? ["enable"] : ["reconnect", "disable"];
+
+/**
+ * Where a server's sign-in lives. Claude owns it, so T3 only points there:
+ * claude.ai for connectors, `/mcp` for other remote servers. stdio and SDK
+ * servers have no sign-in.
+ */
+function detailGuidance(server: ClaudeMcpServerDetail): ClaudeMcpGuidance | undefined {
+  if (server.transport === "claudeai") return MANAGE_ON_CLAUDE_AI;
+  if (server.transport !== "http" && server.transport !== "sse") return undefined;
+  switch (server.status) {
+    case "needs-auth":
+      return SIGN_IN_WITH_MCP;
+    case "connected":
+      return CLEAR_SIGN_IN_WITH_MCP;
+    default:
+      return undefined;
+  }
+}
+
 /** What the Claude MCP server detail dialog shows, from its detail query. */
 export type ClaudeMcpDetailView =
   | { readonly kind: "loading" }
@@ -238,7 +279,10 @@ export type ClaudeMcpDetailView =
       /** The config scope, plus the source when it differs. */
       readonly location?: string;
       readonly toolCountText: string;
+      readonly guidance?: ClaudeMcpGuidance;
       readonly tools: ClaudeMcpServerDetail["tools"];
+      /** In display order; the caller hides them without the providers-manage grant. */
+      readonly actions: ReadonlyArray<ClaudeMcpDetailAction>;
     };
 
 /**
@@ -263,6 +307,7 @@ export function claudeMcpDetailView(input: {
   }
   const target = server.url ?? server.command;
   const location = locationOf(server);
+  const guidance = detailGuidance(server);
   return {
     kind: "server",
     refreshing: input.isPending,
@@ -278,6 +323,8 @@ export function claudeMcpDetailView(input: {
     ...(target === undefined ? {} : { target }),
     ...(location === undefined ? {} : { location }),
     toolCountText: `${server.toolCount} ${server.toolCount === 1 ? "tool" : "tools"}`,
+    ...(guidance === undefined ? {} : { guidance }),
     tools: server.tools,
+    actions: actionsFor(server.status),
   };
 }

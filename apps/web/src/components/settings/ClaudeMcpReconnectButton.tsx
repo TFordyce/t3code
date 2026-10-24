@@ -1,13 +1,15 @@
 /**
- * The Reconnect control for one failed Claude MCP server. It reaches the
- * thread's running Claude process, so pass `threadId` from the thread panel;
- * on global Settings there is no thread and the button is disabled with its
- * reason. Hidden when the session lacks the grant, since the server would
- * refuse the request.
+ * The Reconnect control for one Claude MCP server. With `threadId` (the thread
+ * panel) it reconnects the thread's running Claude process, then calls
+ * `onReconnected` to re-probe. On global Settings there is no thread, and
+ * Reconnect is just `onReconnected`: each fresh probe starts a new Claude
+ * process. With neither it is disabled with its reason. Hidden when the
+ * session lacks the grant, since the server would refuse the request.
  *
  * @module ClaudeMcpReconnectButton
  */
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { ComponentProps } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 
@@ -22,13 +24,15 @@ export function ClaudeMcpReconnectButton({
   threadId,
   name,
   onReconnected,
+  size = "xs",
 }: {
   readonly environmentId: EnvironmentId;
   /** The thread whose running Claude process reconnects; absent on global Settings. */
   readonly threadId?: ThreadId | undefined;
   readonly name: string;
-  /** Called after Claude accepts the reconnect, so the list can re-probe. */
+  /** Asks Claude again: after a live reconnect, or on its own without a thread. */
   readonly onReconnected?: (() => void) | undefined;
+  readonly size?: ComponentProps<typeof Button>["size"];
 }) {
   const canReconnect = useAtomValue(
     serverEnvironment.reconnectClaudeMcpServer.permissionAtom(environmentId),
@@ -37,14 +41,18 @@ export function ClaudeMcpReconnectButton({
     label: "reconnect Claude MCP server",
   });
   if (!canReconnect) return null;
+  const unavailable = threadId === undefined && onReconnected === undefined;
   return (
     <Button
-      size="xs"
+      size={size}
       variant="outline"
-      disabled={threadId === undefined}
-      title={threadId === undefined ? NO_ACTIVE_SESSION_REASON : undefined}
+      disabled={unavailable}
+      title={unavailable ? NO_ACTIVE_SESSION_REASON : undefined}
       onClick={() => {
-        if (threadId === undefined) return;
+        if (threadId === undefined) {
+          onReconnected?.();
+          return;
+        }
         void reconnect({ environmentId, input: { threadId, name } }).then((result) => {
           if (AsyncResult.isSuccess(result)) onReconnected?.();
         });

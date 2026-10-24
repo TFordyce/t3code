@@ -102,17 +102,19 @@ from Settings applies to the whole environment.
 
 ### Reconnect a server
 
-If a Claude server has failed, its row shows **Reconnect**. In a thread's **MCP** panel it
-reconnects the server in that thread's running session and then re-checks the list so you can
-see whether it recovered. On the settings page there is no session, so **Reconnect** is
-disabled with the reason "No active session".
+If a Claude server has failed, its row shows **Reconnect**; click a Claude-only server's name
+to open its details, which offer **Reconnect** for any server that isn't disabled. In a
+thread's **MCP** panel it reconnects the server in that thread's running session and then
+re-checks the list so you can see whether it recovered. On the settings page it asks Claude
+again from scratch, which starts the server anew.
 
 ### Servers that need sign-in
 
 A Claude server that shows **Needs sign-in** can't be signed in from T3 Code. For a
 `claude.ai` connector, follow the link to claude.ai to connect it. For any other server, run
-`/mcp` in Claude Code and authenticate there. Servers you added in T3 Code keep their
-[sign-in](#sign-in-to-a-server) button.
+`/mcp` in Claude Code and authenticate there; to sign a connected remote server out, clear its
+sign-in from `/mcp` too. T3 Code never reads or changes Claude's stored sign-ins. Servers you
+added in T3 Code keep their [sign-in](#sign-in-to-a-server) button.
 
 ## When changes apply
 

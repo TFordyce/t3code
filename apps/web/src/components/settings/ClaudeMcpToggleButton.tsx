@@ -2,12 +2,15 @@
  * The Enable/Disable control for one Claude MCP server row. Shown on both the
  * Settings list and the thread panel: pass the project the row is scoped to,
  * or none for the environment-wide list. Hidden when the session lacks the
- * grant, since the server would refuse the change.
+ * grant, since the server would refuse the change. `onToggled` runs once the
+ * change is saved, so the caller can ask Claude again.
  *
  * @module ClaudeMcpToggleButton
  */
 import type { ClaudeMcpServerStatusValue, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/reactivity";
+import type { ComponentProps } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -19,11 +22,15 @@ export function ClaudeMcpToggleButton({
   projectId,
   name,
   status,
+  onToggled,
+  size = "xs",
 }: {
   readonly environmentId: EnvironmentId;
   readonly projectId?: ProjectId | undefined;
   readonly name: string;
   readonly status: ClaudeMcpServerStatusValue;
+  readonly onToggled?: (() => void) | undefined;
+  readonly size?: ComponentProps<typeof Button>["size"];
 }) {
   const canToggle = useAtomValue(
     serverEnvironment.setClaudeMcpServerEnabled.permissionAtom(environmentId),
@@ -35,12 +42,14 @@ export function ClaudeMcpToggleButton({
   const { label, enable } = claudeMcpToggleFor(status);
   return (
     <Button
-      size="xs"
+      size={size}
       variant="outline"
       onClick={() =>
         void toggle({
           environmentId,
           input: { name, enabled: enable, ...(projectId === undefined ? {} : { projectId }) },
+        }).then((result) => {
+          if (AsyncResult.isSuccess(result)) onToggled?.();
         })
       }
     >
