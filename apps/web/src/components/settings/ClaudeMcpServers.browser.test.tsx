@@ -336,7 +336,11 @@ describe("ClaudeMcpSection", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Add server" }));
     await expect
-      .element(screen.getByText("Claude saves these as plain text in ~/.claude.json."))
+      .element(
+        screen.getByText(
+          "Claude saves environment variables and headers as plain text in ~/.claude.json.",
+        ),
+      )
       .toBeVisible();
     await userEvent.fill(screen.getByLabelText("Server name"), "acme");
     await userEvent.fill(screen.getByLabelText("Command"), "npx");
@@ -366,6 +370,58 @@ describe("ClaudeMcpSection", () => {
     // The server already re-probed fresh, so the list is only re-read.
     expect(probe.refresh).toHaveBeenCalledOnce();
     expect(probe.fresh).not.toHaveBeenCalled();
+  });
+
+  it("adds an HTTP server to Claude with its URL and headers", async () => {
+    probe.view = { data: { servers: [] }, error: null, isPending: false };
+    probe.command.mockReset();
+    probe.command.mockResolvedValue(AsyncResult.success({}));
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await userEvent.click(screen.getByRole("button", { name: "HTTP" }));
+    await expect
+      .element(
+        screen.getByText(
+          "Claude saves environment variables and headers as plain text in ~/.claude.json.",
+        ),
+      )
+      .toBeVisible();
+    await userEvent.fill(screen.getByLabelText("Server name"), "linear");
+    await userEvent.fill(screen.getByLabelText("URL"), "https://mcp.linear.app/mcp");
+    await userEvent.click(screen.getByRole("button", { name: "Add header" }));
+    await userEvent.fill(screen.getByLabelText("Header name"), "Authorization");
+    await userEvent.fill(screen.getByLabelText("Header value"), "Bearer token");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    expect(probe.command).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        cwd: "/home/me",
+        name: "linear",
+        scope: "user",
+        server: {
+          type: "http",
+          url: "https://mcp.linear.app/mcp",
+          headers: { Authorization: "Bearer token" },
+        },
+      },
+    });
+  });
+
+  it("refuses an HTTP server without an http(s) URL", async () => {
+    probe.view = { data: { servers: [] }, error: null, isPending: false };
+    probe.command.mockReset();
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await userEvent.click(screen.getByRole("button", { name: "HTTP" }));
+    await userEvent.fill(screen.getByLabelText("Server name"), "linear");
+    await userEvent.fill(screen.getByLabelText("URL"), "mcp.linear.app");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    await expect.element(screen.getByText("Enter the server's http(s) URL.")).toBeVisible();
+    expect(probe.command).not.toHaveBeenCalled();
   });
 
   it("shows Claude's error in the form and keeps it open", async () => {
