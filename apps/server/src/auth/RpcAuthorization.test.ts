@@ -415,6 +415,15 @@ it.effect.each([
     method: WS_METHODS.serverRemoveClaudeMcpServer,
     payload: { name: "docs", scope: "user", cwd: "/work/app" },
   },
+  {
+    method: WS_METHODS.serverAddClaudeMcpServer,
+    payload: {
+      cwd: "/work",
+      name: "docs",
+      scope: "user",
+      server: { type: "stdio", command: "npx", args: [], env: {} },
+    },
+  },
 ] as const)("denies MCP sign-in RPC $method without providers-manage", ({ method, payload }) =>
   Effect.gen(function* () {
     const group = WsRpcGroup.omit(

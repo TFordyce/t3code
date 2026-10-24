@@ -4,6 +4,8 @@ import {
   OrchestrationV2SearchThreadResult,
 } from "./orchestrationV2.ts";
 import {
+  AddClaudeMcpServerInput,
+  ClaudeMcpAddError,
   ClaudeMcpServerDetailInput,
   ClaudeMcpServerDetailResult,
   ClaudeMcpStatusError,
@@ -506,6 +508,7 @@ export const WS_METHODS = {
   serverSetClaudeMcpServerEnabled: "server.setClaudeMcpServerEnabled",
   serverReconnectClaudeMcpServer: "server.reconnectClaudeMcpServer",
   serverRemoveClaudeMcpServer: "server.removeClaudeMcpServer",
+  serverAddClaudeMcpServer: "server.addClaudeMcpServer",
   serverStartMcpServerSignIn: "server.startMcpServerSignIn",
   serverCompleteMcpServerSignIn: "server.completeMcpServerSignIn",
   serverSignOutMcpServer: "server.signOutMcpServer",
@@ -799,6 +802,11 @@ const WsServerRemoveClaudeMcpServerRpc = Rpc.make(WS_METHODS.serverRemoveClaudeM
   payload: RemoveClaudeMcpServerInput,
   success: Schema.Struct({}),
   error: Schema.Union([ClaudeMcpRemoveError, EnvironmentAuthorizationError]),
+});
+const WsServerAddClaudeMcpServerRpc = Rpc.make(WS_METHODS.serverAddClaudeMcpServer, {
+  payload: AddClaudeMcpServerInput,
+  success: Schema.Struct({}),
+  error: Schema.Union([ClaudeMcpAddError, EnvironmentAuthorizationError]),
 });
 const WsServerStartMcpServerSignInRpc = Rpc.make(WS_METHODS.serverStartMcpServerSignIn, {
   payload: McpServerCheckTarget,
@@ -1990,6 +1998,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerSetClaudeMcpServerEnabledRpc,
   WsServerReconnectClaudeMcpServerRpc,
   WsServerRemoveClaudeMcpServerRpc,
+  WsServerAddClaudeMcpServerRpc,
   WsServerStartMcpServerSignInRpc,
   WsServerCompleteMcpServerSignInRpc,
   WsServerSignOutMcpServerRpc,

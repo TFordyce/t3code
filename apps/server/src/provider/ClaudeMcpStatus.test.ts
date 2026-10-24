@@ -5,9 +5,17 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
-import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  ClaudeMcpAddServerConfig,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 
 import * as ServerSettings from "../serverSettings.ts";
@@ -40,15 +48,19 @@ const makeFakeQuery = (mcpServerStatus: FakeStatus) => {
   return { query, started, aborted, toggles, statusCalls: () => statusCalls };
 };
 
-/** A faked Claude CLI runner: records each run and answers with `result`. */
-const makeFakeCli = (result: Partial<ClaudeMcpStatus.ClaudeMcpCliResult> = {}) => {
-  const runs: Array<ClaudeMcpStatus.ClaudeMcpCliInput> = [];
-  const runCli: ClaudeMcpStatus.ClaudeMcpCli = (input) =>
+/** A faked Claude CLI: records each call and answers with `result`. */
+const makeFakeCli = (
+  result: (
+    call: ClaudeMcpStatus.ClaudeCliCall,
+  ) => Partial<ClaudeMcpStatus.ClaudeCliOutput> = () => ({}),
+) => {
+  const calls: Array<ClaudeMcpStatus.ClaudeCliCall> = [];
+  const runCli: ClaudeMcpStatus.ClaudeMcpCli = (call) =>
     Effect.sync(() => {
-      runs.push(input);
-      return { code: 0, stdout: "", stderr: "", ...result };
+      calls.push(call);
+      return { code: 0, stdout: "", stderr: "", ...result(call) };
     });
-  return { runCli, runs };
+  return { runCli, calls };
 };
 
 const layerFor = (
@@ -516,7 +528,7 @@ it.effect("remove runs claude mcp remove at the reported scope in the probed dir
     yield* service.removeServer({ name: "docs", scope: "local", cwd: "/work/app" });
     yield* service.removeServer({ name: "my server", scope: "user", cwd: "/work/app" });
     assert.deepStrictEqual(
-      cli.runs.map((run) => [run.executable, run.args, run.cwd]),
+      cli.calls.map((call) => [call.binaryPath, call.args, call.cwd]),
       [
         ["/opt/claude", ["mcp", "remove", "docs", "-s", "local"], "/work/app"],
         ["/opt/claude", ["mcp", "remove", "my server", "-s", "user"], "/work/app"],
@@ -540,6 +552,54 @@ it.effect("remove runs claude mcp remove at the reported scope in the probed dir
   );
 });
 
+const decodeServerJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ClaudeMcpAddServerConfig),
+);
+
+const stdioServer = {
+  type: "stdio",
+  command: "npx",
+  args: ["-y", "@acme/mcp", "--flag=a b"],
+  env: { API_KEY: "secret" },
+} as const;
+
+it.effect("add runs claude mcp add-json at user scope in the probe's Claude environment", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  const cli = makeFakeCli();
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    yield* service.addServer({
+      cwd: "/work/app",
+      name: "acme",
+      scope: "user",
+      server: stdioServer,
+    });
+    assert.equal(cli.calls.length, 1);
+    const call = cli.calls[0]!;
+    assert.equal(call.binaryPath, "/opt/claude");
+    assert.deepStrictEqual(call.args.slice(0, 3), ["mcp", "add-json", "acme"]);
+    assert.deepStrictEqual(yield* decodeServerJson(call.args[3]), stdioServer);
+    assert.deepStrictEqual(call.args.slice(4), ["-s", "user"]);
+    assert.isUndefined(call.cwd);
+    assert.equal(call.env.CLAUDE_CONFIG_DIR, (yield* Path.Path).resolve("/claude-home"));
+  }).pipe(
+    Effect.provide(
+      layerFor(
+        fake.query,
+        {
+          providerInstances: {
+            [ProviderInstanceId.make("claudeAgent")]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              config: { binaryPath: "/opt/claude", homePath: "/claude-home" },
+            },
+          },
+        },
+        cli.runCli,
+      ),
+    ),
+  );
+});
+
 it.effect("remove runs Claude with the probe's Claude home", () => {
   const fake = makeFakeQuery(() => Promise.resolve([]));
   const cli = makeFakeCli();
@@ -549,7 +609,7 @@ it.effect("remove runs Claude with the probe's Claude home", () => {
     yield* service.removeServer({ name: "docs", scope: "user", cwd: "/work/app" });
     const probeHome = fake.started[0]?.env?.CLAUDE_CONFIG_DIR;
     assert.isDefined(probeHome);
-    assert.equal(cli.runs[0]?.env.CLAUDE_CONFIG_DIR, probeHome);
+    assert.equal(cli.calls[0]?.env.CLAUDE_CONFIG_DIR, probeHome);
   }).pipe(
     Effect.provide(
       layerFor(
@@ -570,10 +630,10 @@ it.effect("remove runs Claude with the probe's Claude home", () => {
 
 it.effect("remove passes Claude's own error text back when it refuses", () => {
   const fake = makeFakeQuery(() => Promise.resolve([]));
-  const cli = makeFakeCli({
+  const cli = makeFakeCli(() => ({
     code: 1,
     stderr: 'No user-scoped MCP server found with name: "docs"\n',
-  });
+  }));
   return Effect.gen(function* () {
     const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
     const error = yield* service
@@ -582,4 +642,75 @@ it.effect("remove passes Claude's own error text back when it refuses", () => {
     assert.equal(error.reason, "failed");
     assert.equal(error.message, 'No user-scoped MCP server found with name: "docs"');
   }).pipe(Effect.provide(layerFor(fake.query, {}, cli.runCli)));
+});
+it.effect("add passes Claude's error text back and does not re-probe", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  const cli = makeFakeCli(() => ({
+    code: 1,
+    stderr: "MCP server acme already exists in user config\n",
+  }));
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const error = yield* service
+      .addServer({ cwd: "/work/app", name: "acme", scope: "user", server: stdioServer })
+      .pipe(Effect.flip);
+    assert.equal(error.reason, "rejected");
+    assert.equal(error.message, "MCP server acme already exists in user config");
+    assert.equal(fake.started.length, 0);
+  }).pipe(Effect.provide(layerFor(fake.query, {}, cli.runCli)));
+});
+
+it.effect("a successful add re-probes the list fresh, so the next read shows the server", () => {
+  let added = false;
+  const fake = makeFakeQuery(() =>
+    Promise.resolve(added ? [connected("docs"), connected("acme")] : [connected("docs")]),
+  );
+  const cli = makeFakeCli(() => {
+    added = true;
+    return {};
+  });
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    yield* service.probe({ cwd: "/work/app" });
+    yield* service.addServer({
+      cwd: "/work/app",
+      name: "acme",
+      scope: "user",
+      server: stdioServer,
+    });
+    assert.equal(fake.started.length, 2);
+    const after = yield* service.probe({ cwd: "/work/app" });
+    assert.deepStrictEqual(
+      after.servers.map((server) => server.name),
+      ["docs", "acme"],
+    );
+    assert.equal(fake.started.length, 2);
+  }).pipe(Effect.provide(layerFor(fake.query, {}, cli.runCli)));
+});
+
+it.effect("add refuses a name T3 configures, in any project, without running Claude", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  const cli = makeFakeCli();
+  const docs = { transport: "stdio", command: "npx", args: [], env: [] } as const;
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    for (const name of ["docs", "project-only", "t3-code-x"]) {
+      const error = yield* service
+        .addServer({ cwd: "/work/app", name, scope: "user", server: stdioServer })
+        .pipe(Effect.flip);
+      assert.equal(error.reason, "invalidName");
+    }
+    assert.equal(cli.calls.length, 0);
+  }).pipe(
+    Effect.provide(
+      layerFor(
+        fake.query,
+        {
+          mcpServers: { docs },
+          projectSettingsOverrides: { [projectId]: { mcpServers: { "project-only": docs } } },
+        },
+        cli.runCli,
+      ),
+    ),
+  );
 });

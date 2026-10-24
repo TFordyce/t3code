@@ -7,6 +7,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { BUILT_IN_MCP_SERVER_NAME } from "./mcpServers.ts";
 
 /** Mirrors the status values the Claude Agent SDK reports for a loaded MCP server. */
 export const ClaudeMcpServerStatusValue = Schema.Literals([
@@ -188,6 +189,93 @@ export class ClaudeMcpRemoveError extends Schema.TaggedError<ClaudeMcpRemoveErro
         return "Could not run Claude to remove the MCP server.";
       case "failed":
         return this.detail ?? "Claude could not remove the MCP server.";
+    }
+  }
+}
+
+/**
+ * Names Claude's CLI takes for a server, and that can't be misread as a flag:
+ * letters, digits, `-` and `_`, starting with a letter or digit.
+ */
+export const CLAUDE_MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/**
+ * Why `name` can't be added to Claude's own config, or undefined when it can.
+ * A name T3 also configures would merge two different servers into one row on
+ * the list, and `t3-code` is T3's built-in server. The add form and the server
+ * both check with this.
+ */
+export function claudeMcpServerNameError(
+  name: string,
+  t3Names: ReadonlyArray<string>,
+): string | undefined {
+  if (name.startsWith(BUILT_IN_MCP_SERVER_NAME)) {
+    return `Names starting with "${BUILT_IN_MCP_SERVER_NAME}" are reserved.`;
+  }
+  if (!CLAUDE_MCP_SERVER_NAME_PATTERN.test(name)) {
+    return "Use letters, digits, - or _, starting with a letter or digit.";
+  }
+  if (t3Names.includes(name)) {
+    return `T3 Code already has a server named "${name}". Pick another name.`;
+  }
+  return undefined;
+}
+
+/** Where in Claude's own config an added server is saved. */
+export const ClaudeMcpAddScope = Schema.Literals(["user"]);
+export type ClaudeMcpAddScope = typeof ClaudeMcpAddScope.Type;
+
+/** A stdio server, in the JSON shape `claude mcp add-json` takes. */
+export const ClaudeMcpStdioServerConfig = Schema.Struct({
+  type: Schema.Literal("stdio"),
+  command: TrimmedNonEmptyString,
+  args: Schema.Array(Schema.String),
+  env: Schema.Record(Schema.String, Schema.String),
+});
+export type ClaudeMcpStdioServerConfig = typeof ClaudeMcpStdioServerConfig.Type;
+
+/** The server config passed to Claude as-is; each transport is one member. */
+export const ClaudeMcpAddServerConfig = Schema.Union([ClaudeMcpStdioServerConfig]);
+export type ClaudeMcpAddServerConfig = typeof ClaudeMcpAddServerConfig.Type;
+
+/**
+ * Adds a server to Claude's own config through Claude's CLI. `cwd` and
+ * `projectId` name the list to re-probe afterwards, as in
+ * {@link ClaudeMcpStatusInput}.
+ */
+export const AddClaudeMcpServerInput = Schema.Struct({
+  cwd: ClaudeMcpStatusInput.fields.cwd,
+  projectId: ClaudeMcpStatusInput.fields.projectId,
+  name: TrimmedNonEmptyString,
+  scope: ClaudeMcpAddScope,
+  server: ClaudeMcpAddServerConfig,
+});
+export type AddClaudeMcpServerInput = typeof AddClaudeMcpServerInput.Type;
+
+export class ClaudeMcpAddError extends Schema.TaggedError<ClaudeMcpAddError>()(
+  "ClaudeMcpAddError",
+  {
+    /**
+     * `invalidName`: refused by {@link claudeMcpServerNameError}.
+     * `unsupportedLauncher`: Claude resolves to a Windows script that would
+     * need a shell to run. `rejected`: Claude refused; `detail` is its error.
+     */
+    reason: Schema.Literals(["invalidName", "settings", "unsupportedLauncher", "rejected"]),
+    detail: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    if (this.detail !== undefined && this.detail.length > 0) return this.detail;
+    switch (this.reason) {
+      case "invalidName":
+        return "That name can't be used for a Claude server.";
+      case "settings":
+        return "Could not read the Claude provider settings.";
+      case "unsupportedLauncher":
+        return "Claude's launcher script can't be run directly. Set the Claude binary path to claude.exe.";
+      case "rejected":
+        return "Claude could not add the MCP server.";
     }
   }
 }

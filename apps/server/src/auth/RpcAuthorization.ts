@@ -66,6 +66,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverSetClaudeMcpServerEnabled]: AuthProvidersManageScope,
   [WS_METHODS.serverReconnectClaudeMcpServer]: AuthProvidersManageScope,
   [WS_METHODS.serverRemoveClaudeMcpServer]: AuthProvidersManageScope,
+  [WS_METHODS.serverAddClaudeMcpServer]: AuthProvidersManageScope,
   [WS_METHODS.serverStartMcpServerSignIn]: AuthProvidersManageScope,
   [WS_METHODS.serverCompleteMcpServerSignIn]: AuthProvidersManageScope,
   [WS_METHODS.serverSignOutMcpServer]: AuthProvidersManageScope,
