@@ -1,13 +1,15 @@
 /**
- * The Reconnect control for one failed Claude MCP server. It reaches the
- * thread's running Claude process, so pass `threadId` from the thread panel;
- * on global Settings there is no thread and the button is disabled with its
- * reason. Hidden when the session lacks the grant, since the server would
- * refuse the request.
+ * The Reconnect control for one Claude MCP server. With `threadId` (the thread
+ * panel) it reconnects the thread's running Claude process, then calls
+ * `onReprobe` to ask Claude again. On global Settings there is no thread, and
+ * Reconnect is just `onReprobe`: each fresh probe starts a new Claude
+ * process. With neither it is disabled with its reason. Hidden when the
+ * session lacks the grant, since the server would refuse the request.
  *
  * @module ClaudeMcpReconnectButton
  */
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { ComponentProps } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 
@@ -21,14 +23,19 @@ export function ClaudeMcpReconnectButton({
   environmentId,
   threadId,
   name,
-  onReconnected,
+  onReprobe,
+  disabled = false,
+  size = "xs",
 }: {
   readonly environmentId: EnvironmentId;
   /** The thread whose running Claude process reconnects; absent on global Settings. */
   readonly threadId?: ThreadId | undefined;
   readonly name: string;
-  /** Called after Claude accepts the reconnect, so the list can re-probe. */
-  readonly onReconnected?: (() => void) | undefined;
+  /** Asks Claude again: after a live reconnect, or on its own without a thread. */
+  readonly onReprobe?: (() => void) | undefined;
+  /** Held while a probe is already running. */
+  readonly disabled?: boolean | undefined;
+  readonly size?: ComponentProps<typeof Button>["size"];
 }) {
   const canReconnect = useAtomValue(
     serverEnvironment.reconnectClaudeMcpServer.permissionAtom(environmentId),
@@ -37,16 +44,20 @@ export function ClaudeMcpReconnectButton({
     label: "reconnect Claude MCP server",
   });
   if (!canReconnect) return null;
+  const unavailable = threadId === undefined && onReprobe === undefined;
   return (
     <Button
-      size="xs"
+      size={size}
       variant="outline"
-      disabled={threadId === undefined}
-      title={threadId === undefined ? NO_ACTIVE_SESSION_REASON : undefined}
+      disabled={unavailable || disabled}
+      title={unavailable ? NO_ACTIVE_SESSION_REASON : undefined}
       onClick={() => {
-        if (threadId === undefined) return;
+        if (threadId === undefined) {
+          onReprobe?.();
+          return;
+        }
         void reconnect({ environmentId, input: { threadId, name } }).then((result) => {
-          if (AsyncResult.isSuccess(result)) onReconnected?.();
+          if (AsyncResult.isSuccess(result)) onReprobe?.();
         });
       }}
     >

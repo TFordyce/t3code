@@ -1,7 +1,7 @@
-import type { ClaudeMcpServerReport } from "@t3tools/contracts";
+import type { ClaudeMcpServerDetail, ClaudeMcpServerReport } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { claudeMcpView, unreportedProviderNames } from "./claudeMcpRows.ts";
+import { claudeMcpDetailView, claudeMcpView, unreportedProviderNames } from "./claudeMcpRows.ts";
 
 const report = (overrides: Partial<ClaudeMcpServerReport> = {}): ClaudeMcpServerReport => ({
   name: "docs",
@@ -159,5 +159,251 @@ describe("unreportedProviderNames", () => {
         { driver: "grok", enabled: true, displayName: "Grok", userMcpTransports: [] },
       ]),
     ).toEqual(["Codex", "opencode"]);
+  });
+});
+
+const detail = (overrides: Partial<ClaudeMcpServerDetail> = {}): ClaudeMcpServerDetail => ({
+  name: "docs",
+  status: "connected",
+  toolCount: 2,
+  scope: "user",
+  source: "user",
+  transport: "http",
+  url: "https://mcp.example.com/mcp",
+  serverInfo: { name: "Docs MCP", version: "1.2.0" },
+  tools: [],
+  ...overrides,
+});
+
+const detailResult = (server: ClaudeMcpServerDetail | null) => ({
+  server,
+  checkedAt: "2026-10-24T10:00:00.000Z",
+});
+
+describe("claudeMcpDetailView", () => {
+  it("is loading while the first probe runs", () => {
+    expect(claudeMcpDetailView({ data: null, isPending: true, error: null })).toEqual({
+      kind: "loading",
+    });
+  });
+
+  it("shows a probe error when there is nothing to show yet", () => {
+    expect(
+      claudeMcpDetailView({ data: null, isPending: false, error: "Claude could not report" }),
+    ).toEqual({ kind: "error", message: "Claude could not report" });
+  });
+
+  it("says Claude no longer reports a server that has disappeared", () => {
+    expect(
+      claudeMcpDetailView({ data: detailResult(null), isPending: false, error: null }),
+    ).toEqual({ kind: "missing", message: "Claude no longer reports this server" });
+  });
+
+  it("describes a connected remote server with its version, URL, scope and tool count", () => {
+    const view = claudeMcpDetailView({
+      data: detailResult(detail()),
+      isPending: false,
+      error: null,
+    });
+    expect(view).toEqual({
+      kind: "server",
+      refreshing: false,
+      name: "docs",
+      status: "connected",
+      statusText: "Connected",
+      tone: "success",
+      serverInfo: "Docs MCP 1.2.0",
+      transport: "HTTP",
+      target: "https://mcp.example.com/mcp",
+      location: "User",
+      toolCountText: "2 tools",
+      guidance: { kind: "text", text: "Run /mcp in Claude Code to clear sign-in." },
+      tools: [],
+      noToolsText: "This server offers no tools.",
+      actions: ["reconnect", "disable"],
+    });
+  });
+
+  it("names a stdio server's command and adds the source when it differs from the scope", () => {
+    const view = claudeMcpDetailView({
+      data: detailResult(
+        detail({
+          transport: "stdio",
+          url: undefined,
+          command: "npx",
+          scope: "user",
+          source: "plugin",
+          serverInfo: undefined,
+          toolCount: 1,
+        }),
+      ),
+      isPending: false,
+      error: null,
+    });
+    expect(view).toMatchObject({
+      transport: "stdio",
+      target: "npx",
+      location: "User (from Plugin)",
+      toolCountText: "1 tool",
+    });
+    expect(view).not.toHaveProperty("serverInfo");
+  });
+
+  it("shows a failed server's error and hides its version", () => {
+    const view = claudeMcpDetailView({
+      data: detailResult(detail({ status: "failed", error: "401 Unauthorized", toolCount: 0 })),
+      isPending: false,
+      error: null,
+    });
+    expect(view).toMatchObject({
+      statusText: "Failed",
+      tone: "error",
+      error: "401 Unauthorized",
+      toolCountText: "0 tools",
+    });
+    expect(view).not.toHaveProperty("serverInfo");
+  });
+
+  it("keeps showing the last answer, marked refreshing, while Claude is asked again", () => {
+    expect(
+      claudeMcpDetailView({ data: detailResult(detail()), isPending: true, error: null }),
+    ).toMatchObject({ kind: "server", refreshing: true });
+  });
+
+  it("labels a claude.ai connector by transport and scope", () => {
+    expect(
+      claudeMcpDetailView({
+        data: detailResult(
+          detail({ transport: "claudeai", scope: "claudeai", source: "claudeai" }),
+        ),
+        isPending: false,
+        error: null,
+      }),
+    ).toMatchObject({ transport: "claude.ai", location: "claude.ai" });
+  });
+});
+
+describe("claudeMcpDetailView actions", () => {
+  const actionsFor = (status: ClaudeMcpServerDetail["status"]) => {
+    const view = claudeMcpDetailView({
+      data: detailResult(detail({ status })),
+      isPending: false,
+      error: null,
+    });
+    return view.kind === "server" ? view.actions : undefined;
+  };
+
+  it("offers Reconnect and Disable for every server that is not disabled", () => {
+    for (const status of ["connected", "pending", "failed", "needs-auth"] as const) {
+      expect(actionsFor(status)).toEqual(["reconnect", "disable"]);
+    }
+  });
+
+  it("offers only Enable for a disabled server", () => {
+    expect(actionsFor("disabled")).toEqual(["enable"]);
+  });
+});
+
+describe("claudeMcpDetailView sign-in guidance", () => {
+  const guidanceFor = (overrides: Partial<ClaudeMcpServerDetail>) => {
+    const view = claudeMcpDetailView({
+      data: detailResult(detail(overrides)),
+      isPending: false,
+      error: null,
+    });
+    return view.kind === "server" ? (view.guidance ?? null) : undefined;
+  };
+  const manageOnClaudeAi = {
+    kind: "link",
+    label: "Manage on claude.ai",
+    href: "https://claude.ai/settings/connectors",
+  };
+
+  it("links a claude.ai connector to claude.ai whatever its status", () => {
+    for (const status of ["connected", "pending", "failed", "needs-auth", "disabled"] as const) {
+      expect(guidanceFor({ transport: "claudeai", scope: "claudeai", status })).toEqual(
+        manageOnClaudeAi,
+      );
+    }
+  });
+
+  it("tells a remote server that needs sign-in to run /mcp to sign in", () => {
+    for (const transport of ["http", "sse"] as const) {
+      expect(guidanceFor({ transport, status: "needs-auth" })).toEqual({
+        kind: "text",
+        text: "Run /mcp in Claude Code to sign in.",
+      });
+    }
+  });
+
+  it("tells a connected remote server how to clear its sign-in", () => {
+    for (const transport of ["http", "sse"] as const) {
+      expect(guidanceFor({ transport, status: "connected" })).toEqual({
+        kind: "text",
+        text: "Run /mcp in Claude Code to clear sign-in.",
+      });
+    }
+  });
+
+  it("gives a remote server no sign-in line while it is connecting, failed or disabled", () => {
+    for (const status of ["pending", "failed", "disabled"] as const) {
+      expect(guidanceFor({ transport: "http", status })).toBeNull();
+    }
+  });
+
+  it("never gives a stdio or SDK server sign-in guidance", () => {
+    for (const transport of ["stdio", "sdk"] as const) {
+      for (const status of ["connected", "needs-auth"] as const) {
+        expect(guidanceFor({ transport, status, url: undefined })).toBeNull();
+      }
+    }
+  });
+});
+
+describe("claudeMcpDetailView tools", () => {
+  const toolsOf = (server: ClaudeMcpServerDetail) => {
+    const view = claudeMcpDetailView({ data: detailResult(server), isPending: false, error: null });
+    if (view.kind !== "server") throw new Error(`expected a server, got ${view.kind}`);
+    return view;
+  };
+
+  it("summarises each tool by the first line of its description and keeps its safety flags", () => {
+    const view = toolsOf(
+      detail({
+        tools: [
+          {
+            name: "search",
+            description: "\n  Search the docs.  \nReturns up to 10 results.\n",
+            readOnly: true,
+            destructive: false,
+          },
+          { name: "delete_page", readOnly: false, destructive: true },
+        ],
+      }),
+    );
+    expect(view.tools).toEqual([
+      {
+        name: "search",
+        summary: "Search the docs.",
+        description: "Search the docs.  \nReturns up to 10 results.",
+        readOnly: true,
+        destructive: false,
+      },
+      { name: "delete_page", readOnly: false, destructive: true },
+    ]);
+    expect(view).not.toHaveProperty("noToolsText");
+  });
+
+  it("says clearly when a server offers no tools, and why when it is not connected", () => {
+    expect(toolsOf(detail({ toolCount: 0 }))).toMatchObject({
+      tools: [],
+      noToolsText: "This server offers no tools.",
+    });
+    expect(toolsOf(detail({ status: "disabled", toolCount: 0 }))).toMatchObject({
+      noToolsText: "Enable this server to see its tools.",
+    });
+    expect(toolsOf(detail({ status: "needs-auth", toolCount: 0 }))).toMatchObject({
+      noToolsText: "Claude lists this server's tools once it connects.",
+    });
   });
 });

@@ -39,6 +39,7 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
+import { claudeMcpProbeInput } from "./claudeMcpRows.ts";
 import {
   isRpcClientError,
   request,
@@ -1000,6 +1001,14 @@ export function createServerEnvironmentAtoms<R, E>(
       ),
     );
   });
+  // Probing starts Claude and its MCP servers, so automatic reads are
+  // throttled per environment and directory; a manual refresh bypasses that.
+  const claudeMcpStatus = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:server:claude-mcp-status",
+    tag: WS_METHODS.serverGetClaudeMcpStatus,
+    staleTimeMs: 5 * 60_000,
+  });
+
   const welcome = (target: {
     readonly environmentId: EnvironmentId;
     readonly input: EnvironmentRpcInput<typeof WS_METHODS.subscribeServerLifecycle>;
@@ -1181,12 +1190,16 @@ export function createServerEnvironmentAtoms<R, E>(
           ),
         ),
     }),
-    // Probing starts Claude and its MCP servers, so automatic reads are
-    // throttled per environment and directory; a manual refresh bypasses that.
-    claudeMcpStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:claude-mcp-status",
-      tag: WS_METHODS.serverGetClaudeMcpStatus,
+    claudeMcpStatus,
+    // Reads the server's cached probe (probing on a miss), and re-reads whenever
+    // the list for the same directory changes, so an open dialog follows a
+    // refresh or toggle in place.
+    claudeMcpServerDetail: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:claude-mcp-server-detail",
+      tag: WS_METHODS.serverGetClaudeMcpServerDetail,
       staleTimeMs: 5 * 60_000,
+      refreshTrigger: ({ environmentId, input: { cwd, projectId } }) =>
+        claudeMcpStatus({ environmentId, input: claudeMcpProbeInput(cwd, projectId) }),
     }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",

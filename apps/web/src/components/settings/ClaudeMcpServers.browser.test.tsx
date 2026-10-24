@@ -7,11 +7,17 @@ import {
 import { userEvent } from "vite-plus/test/browser";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { AsyncResult } from "effect/reactivity";
+
 import { render } from "../../../test/render";
 
 const probe = vi.hoisted(() => ({
   claudeMcpStatus: vi.fn((target: unknown) => target),
+  claudeMcpServerDetail: vi.fn((target: unknown) => ({ detail: target })),
+  detail: null as unknown,
   refresh: vi.fn(),
+  fresh: vi.fn((_target: unknown) => Promise.resolve({ _tag: "Success" })),
+  command: vi.fn((_target: unknown): Promise<unknown> => Promise.resolve(undefined)),
   view: {
     data: null as unknown,
     error: null as string | null,
@@ -27,6 +33,7 @@ vi.mock(import("../../state/server"), async (original) => {
     serverEnvironment: {
       ...actual.serverEnvironment,
       claudeMcpStatus: probe.claudeMcpStatus as never,
+      claudeMcpServerDetail: probe.claudeMcpServerDetail as never,
       reconnectClaudeMcpServer: {
         ...actual.serverEnvironment.reconnectClaudeMcpServer,
         permissionAtom: () => Atom.make(true),
@@ -40,16 +47,32 @@ vi.mock(import("../../state/server"), async (original) => {
 });
 vi.mock(import("../../state/query"), async (original) => ({
   ...(await original()),
-  useEnvironmentQuery: ((atom: unknown) => ({
-    ...probe.view,
-    data: atom === null ? null : probe.view.data,
-    refresh: probe.refresh,
-  })) as never,
+  useEnvironmentQuery: ((atom: unknown) =>
+    atom !== null && typeof atom === "object" && "detail" in atom
+      ? { data: probe.detail, error: null, isPending: false, refresh: probe.refresh }
+      : {
+          ...probe.view,
+          data: atom === null ? null : probe.view.data,
+          refresh: probe.refresh,
+        }) as never,
+}));
+
+vi.mock(import("../../state/use-atom-query-runner"), () => ({
+  useAtomQueryRunner: (() => probe.fresh) as never,
+}));
+vi.mock(import("../../state/use-atom-command"), async (original) => ({
+  ...(await original()),
+  useAtomCommand: (() => probe.command) as never,
 }));
 
 import { ClaudeMcpSection } from "./ClaudeMcpServers";
 
 const environmentId = EnvironmentId.make("environment-1");
+
+// The test page has no stacking CSS, so the modal's inert backdrop sits over
+// the popup and swallows pointer clicks; click the element directly instead.
+const clickInDialog = (locator: { element: () => Element }) =>
+  (locator.element() as HTMLElement).click();
 
 const provider = (driver: string, displayName: string): ServerProvider =>
   ({
@@ -74,7 +97,7 @@ const renderSection = () =>
 describe("ClaudeMcpSection", () => {
   it("probes on mount, shows loading, then an error that Retry asks again about", async () => {
     probe.view = { data: null, error: null, isPending: true };
-    const screen = await renderSection();
+    await using screen = await renderSection();
 
     expect(probe.claudeMcpStatus).toHaveBeenCalledWith({
       environmentId,
@@ -103,10 +126,17 @@ describe("ClaudeMcpSection", () => {
     await expect.element(screen.getByText("Codex: not reported by this provider.")).toBeVisible();
 
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(probe.fresh).toHaveBeenCalledWith({
+      environmentId,
+      input: { cwd: "/home/me", fresh: true },
+    });
+    // The list is re-read once the fresh probe has settled.
+    await probe.fresh.mock.results[0]?.value;
     expect(probe.refresh).toHaveBeenCalledOnce();
   });
 
-  it("shows Reconnect disabled with its reason, and Enable for a disabled server", async () => {
+  it("asks Claude again from a failed row's Reconnect, and offers Enable for a disabled server", async () => {
+    probe.fresh.mockClear();
     probe.view = {
       data: {
         servers: [
@@ -117,11 +147,137 @@ describe("ClaudeMcpSection", () => {
       error: null,
       isPending: false,
     };
-    const screen = await renderSection();
+    await using screen = await renderSection();
 
-    const reconnect = screen.getByRole("button", { name: "Reconnect" });
-    await expect.element(reconnect).toBeDisabled();
-    await expect.element(reconnect).toHaveAttribute("title", "No active session");
     await expect.element(screen.getByRole("button", { name: "Enable" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(probe.fresh).toHaveBeenCalledWith({
+      environmentId,
+      input: { cwd: "/home/me", fresh: true },
+    });
+  });
+
+  it("opens a Claude-only server's detail when its row is clicked", async () => {
+    probe.view = {
+      data: { servers: [{ name: "docs", status: "connected", toolCount: 2, scope: "user" }] },
+      error: null,
+      isPending: false,
+    };
+    probe.detail = {
+      server: {
+        name: "docs",
+        status: "connected",
+        toolCount: 2,
+        scope: "user",
+        transport: "http",
+        url: "https://mcp.example.com/mcp",
+        serverInfo: { name: "Docs MCP", version: "1.2.0" },
+        tools: [],
+      },
+      checkedAt: "2026-10-24T10:00:00.000Z",
+    };
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: /docs/ }));
+
+    expect(probe.claudeMcpServerDetail).toHaveBeenCalledWith({
+      environmentId,
+      input: { cwd: "/home/me", name: "docs" },
+    });
+    const dialog = screen.getByRole("dialog");
+    await expect.element(dialog.getByText("Docs MCP 1.2.0")).toBeVisible();
+    await expect.element(dialog.getByText("https://mcp.example.com/mcp")).toBeVisible();
+    await expect.element(dialog.getByText("2 tools")).toBeVisible();
+  });
+
+  it("disables a server from its dialog, then asks Claude again so the dialog updates", async () => {
+    probe.view = {
+      data: { servers: [{ name: "docs", status: "connected", toolCount: 2, scope: "user" }] },
+      error: null,
+      isPending: false,
+    };
+    probe.detail = {
+      server: {
+        name: "docs",
+        status: "connected",
+        toolCount: 2,
+        scope: "user",
+        transport: "http",
+        url: "https://mcp.example.com/mcp",
+        tools: [],
+      },
+      checkedAt: "2026-10-24T10:00:00.000Z",
+    };
+    probe.fresh.mockClear();
+    probe.command.mockReset();
+    probe.command.mockResolvedValue(AsyncResult.success(undefined));
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: /docs/ }));
+    const dialog = screen.getByRole("dialog");
+    await expect
+      .element(dialog.getByText("Run /mcp in Claude Code to clear sign-in."))
+      .toBeVisible();
+    clickInDialog(dialog.getByRole("button", { name: "Disable" }));
+
+    expect(probe.command).toHaveBeenCalledWith({
+      environmentId,
+      input: { name: "docs", enabled: false },
+    });
+    await probe.command.mock.results[0]?.value;
+    expect(probe.fresh).toHaveBeenCalledWith({
+      environmentId,
+      input: { cwd: "/home/me", fresh: true },
+    });
+  });
+
+  it("reconnects from the dialog by asking Claude again", async () => {
+    probe.view = {
+      data: { servers: [{ name: "docs", status: "failed", toolCount: 0, scope: "user" }] },
+      error: null,
+      isPending: false,
+    };
+    probe.detail = {
+      server: { name: "docs", status: "failed", toolCount: 0, scope: "user", tools: [] },
+      checkedAt: "2026-10-24T10:00:00.000Z",
+    };
+    probe.fresh.mockClear();
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: /docs/ }));
+    clickInDialog(screen.getByRole("dialog").getByRole("button", { name: "Reconnect" }));
+    expect(probe.fresh).toHaveBeenCalledWith({
+      environmentId,
+      input: { cwd: "/home/me", fresh: true },
+    });
+  });
+
+  it("shows the open dialog probing, with its actions held, until the fresh probe settles", async () => {
+    probe.view = {
+      data: { servers: [{ name: "docs", status: "failed", toolCount: 0, scope: "user" }] },
+      error: null,
+      isPending: false,
+    };
+    probe.detail = {
+      server: { name: "docs", status: "failed", toolCount: 0, scope: "user", tools: [] },
+      checkedAt: "2026-10-24T10:00:00.000Z",
+    };
+    let settle: (result: { _tag: "Success" }) => void = () => {};
+    probe.fresh.mockImplementationOnce(
+      () => new Promise<{ _tag: "Success" }>((resolve) => (settle = resolve)),
+    );
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: /docs/ }));
+    const dialog = screen.getByRole("dialog");
+    clickInDialog(dialog.getByRole("button", { name: "Reconnect" }));
+
+    await expect.element(dialog.getByRole("status")).toBeVisible();
+    await expect.element(dialog.getByRole("button", { name: "Reconnect" })).toBeDisabled();
+    await expect.element(dialog.getByRole("button", { name: "Disable" })).toBeDisabled();
+
+    settle(AsyncResult.success(undefined));
+    await expect.element(dialog.getByRole("button", { name: "Reconnect" })).toBeEnabled();
+    await expect.element(dialog.getByRole("status")).not.toBeInTheDocument();
   });
 });

@@ -319,7 +319,7 @@ function McpServersEnvironmentPanel({
               <ClaudeLiveStatus
                 row={claude.view?.builtIn}
                 environmentId={environmentId}
-                onReconnected={claude.refresh}
+                onReprobe={claude.refresh}
               />
             </div>
             <Badge variant="secondary">Built in</Badge>
@@ -446,7 +446,7 @@ function McpServerRow({
             <ClaudeLiveStatus
               row={claude}
               environmentId={signIn.environmentId}
-              onReconnected={onClaudeReconnected}
+              onReprobe={onClaudeReconnected}
             />
           ) : null}
           {enabled ? <McpSignInControls {...signIn} config={config} check={check} /> : null}

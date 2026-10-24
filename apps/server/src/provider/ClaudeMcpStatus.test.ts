@@ -98,6 +98,86 @@ it.effect("returns every reported server with status, tool count, scope and sour
   }).pipe(Effect.provide(layerFor(fake.query)));
 });
 
+it.effect("detail redacts headers, env, args and URL query strings", () => {
+  const fake = makeFakeQuery(() =>
+    Promise.resolve([
+      connected("remote", {
+        serverInfo: { name: "Remote MCP", version: "1.2.0" },
+        config: {
+          type: "http",
+          url: "https://user:pw@mcp.example.com/v1/mcp?token=secret#frag",
+          headers: { Authorization: "Bearer secret" },
+        },
+        scope: "user",
+        source: "user",
+        tools: [
+          { name: "read", description: "Reads", annotations: { readOnly: true, openWorld: true } },
+          { name: "drop", annotations: { destructive: true } },
+        ],
+      }),
+      connected("local", {
+        config: {
+          type: "stdio",
+          command: "/usr/local/bin/npx",
+          args: ["-y", "server", "--key=secret"],
+          env: { API_KEY: "secret" },
+        },
+        scope: "project",
+      }),
+      connected("plain", { config: { command: "C:\\tools\\mcp-server.exe" }, scope: "user" }),
+    ]),
+  );
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const remote = yield* service.detail({ cwd: "/work/app", name: "remote" });
+    assert.deepStrictEqual(remote.server, {
+      name: "remote",
+      status: "connected",
+      toolCount: 2,
+      scope: "user",
+      source: "user",
+      serverInfo: { name: "Remote MCP", version: "1.2.0" },
+      transport: "http",
+      url: "https://mcp.example.com/v1/mcp",
+      tools: [
+        { name: "read", description: "Reads", readOnly: true, destructive: false },
+        { name: "drop", readOnly: false, destructive: true },
+      ],
+    });
+    const local = yield* service.detail({ cwd: "/work/app", name: "local" });
+    assert.equal(local.server?.transport, "stdio");
+    assert.equal(local.server?.command, "npx");
+    assert.notInclude(JSON.stringify(local), "secret");
+    const plain = yield* service.detail({ cwd: "/work/app", name: "plain" });
+    assert.equal(plain.server?.command, "mcp-server.exe");
+  }).pipe(Effect.provide(layerFor(fake.query)));
+});
+
+it.effect(
+  "detail reads the cached probe, probes on a miss, and is null for an unknown name",
+  () => {
+    const fake = makeFakeQuery(() => Promise.resolve([connected("docs", { scope: "user" })]));
+    return Effect.gen(function* () {
+      const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+      const missed = yield* service.detail({ cwd: "/work/app", name: "docs" });
+      assert.equal(missed.server?.status, "connected");
+      assert.equal(fake.started.length, 1);
+
+      const list = yield* service.probe({ cwd: "/work/app" });
+      const hit = yield* service.detail({ cwd: "/work/app", name: "docs" });
+      assert.equal(hit.checkedAt, list.checkedAt);
+      assert.equal(fake.started.length, 1);
+      assert.deepStrictEqual(list.servers, [
+        { name: "docs", status: "connected", toolCount: 2, scope: "user" },
+      ]);
+
+      const gone = yield* service.detail({ cwd: "/work/app", name: "removed" });
+      assert.isNull(gone.server);
+      assert.equal(fake.started.length, 1);
+    }).pipe(Effect.provide(layerFor(fake.query)));
+  },
+);
+
 it.effect("probes with its own options: project config and connectors on, hooks off", () => {
   const fake = makeFakeQuery(() => Promise.resolve([]));
   return Effect.gen(function* () {
@@ -370,5 +450,48 @@ it.effect("reconnect surfaces a refusal from Claude", () => {
       .reconnectServer({ threadId: ThreadId.make("t-a"), name: "docs" })
       .pipe(Effect.flip);
     assert.equal(error.reason, "failed");
+  }).pipe(Effect.provide(layerFor(fake.query)));
+});
+
+it.effect("a fresh request re-probes its own directory and leaves the others cached", () => {
+  let probes = 0;
+  const fake = makeFakeQuery(() => Promise.resolve([connected(`probe-${++probes}`)]));
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    yield* service.probe({ cwd: "/work/app" });
+    const other = yield* service.probe({ cwd: "/work/other" });
+    assert.equal(fake.started.length, 2);
+
+    const fresh = yield* service.probe({ cwd: "/work/app", fresh: true });
+    assert.equal(fresh.servers[0]?.name, "probe-3");
+    assert.equal(fake.started.length, 3);
+
+    // Later plain reads see the fresh result; the other directory keeps its own.
+    const after = yield* service.probe({ cwd: "/work/app" });
+    assert.deepStrictEqual(after, fresh);
+    assert.deepStrictEqual(yield* service.probe({ cwd: "/work/other" }), other);
+    assert.equal(fake.started.length, 3);
+  }).pipe(Effect.provide(layerFor(fake.query)));
+});
+
+it.effect("concurrent fresh requests for one directory share a single probe", () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const fake = makeFakeQuery(() => {
+    entered.resolve();
+    return release.promise.then(() => [connected("a")]);
+  });
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const fresh = service.probe({ cwd: "/work/app", fresh: true });
+    const all = yield* Effect.forkChild(
+      Effect.all([fresh, fresh, service.probe({ cwd: "/work/app" })], {
+        concurrency: "unbounded",
+      }),
+    );
+    yield* Effect.promise(() => entered.promise);
+    release.resolve();
+    yield* Fiber.join(all);
+    assert.equal(fake.started.length, 1);
   }).pipe(Effect.provide(layerFor(fake.query)));
 });

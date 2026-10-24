@@ -23,6 +23,9 @@ import {
   ClaudeMcpToggleError,
   ClaudeSettings,
   defaultInstanceIdForDriver,
+  type ClaudeMcpServerDetail,
+  type ClaudeMcpServerDetailInput,
+  type ClaudeMcpServerDetailResult,
   type ClaudeMcpServerReport,
   type ClaudeMcpStatusInput,
   type ClaudeMcpStatusResult,
@@ -42,6 +45,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -112,17 +116,84 @@ function buildClaudeMcpProbeQueryOptions(input: {
   };
 }
 
-function toReport(server: McpServerStatus, disabled: ReadonlySet<string>): ClaudeMcpServerReport {
+/** A probe result as cached: every server's redacted detail, so the list and detail RPCs share one probe. */
+interface ProbeResult {
+  readonly servers: ReadonlyArray<ClaudeMcpServerDetail>;
+  readonly checkedAt: string;
+}
+
+/** Drops userinfo, query string and fragment, where remote server credentials live. */
+function redactUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Only the executable's own name: its directory, args and env stay on the server. */
+const commandName = (command: string) => command.split(/[\\/]/).at(-1) ?? command;
+
+function transportOf(
+  config: McpServerStatus["config"],
+): Pick<ClaudeMcpServerDetail, "transport" | "url" | "command"> {
+  if (config === undefined) return {};
+  switch (config.type) {
+    case undefined:
+    case "stdio":
+      return { transport: "stdio", command: commandName(config.command) };
+    case "http":
+    case "sse":
+    case "claudeai-proxy": {
+      const url = redactUrl(config.url);
+      return {
+        transport: config.type === "claudeai-proxy" ? "claudeai" : config.type,
+        ...(url === undefined ? {} : { url }),
+      };
+    }
+    default:
+      return { transport: "sdk" };
+  }
+}
+
+/**
+ * The redacted detail for one reported server. Everything that could carry a
+ * secret (headers, env, args, URL query strings) is dropped here, before
+ * caching, so nothing downstream can send it.
+ */
+function toDetail(server: McpServerStatus, disabled: ReadonlySet<string>): ClaudeMcpServerDetail {
   const isDisabled = disabled.has(server.name);
+  const tools = isDisabled ? [] : (server.tools ?? []);
   return {
     name: server.name,
     status: isDisabled ? "disabled" : server.status,
-    toolCount: isDisabled ? 0 : (server.tools?.length ?? 0),
+    toolCount: tools.length,
     ...(server.error === undefined || isDisabled ? {} : { error: server.error }),
     ...(server.scope === undefined ? {} : { scope: server.scope }),
     ...(server.source === undefined ? {} : { source: server.source }),
+    ...(server.serverInfo === undefined || isDisabled
+      ? {}
+      : { serverInfo: { name: server.serverInfo.name, version: server.serverInfo.version } }),
+    ...transportOf(server.config),
+    tools: tools.map((tool) => ({
+      name: tool.name,
+      ...(tool.description === undefined ? {} : { description: tool.description }),
+      readOnly: tool.annotations?.readOnly === true,
+      destructive: tool.annotations?.destructive === true,
+    })),
   };
 }
+
+/** The lean list row: counts only, so the list payload doesn't grow with tools. */
+const toReport = (detail: ClaudeMcpServerDetail): ClaudeMcpServerReport => ({
+  name: detail.name,
+  status: detail.status,
+  toolCount: detail.toolCount,
+  ...(detail.error === undefined ? {} : { error: detail.error }),
+  ...(detail.scope === undefined ? {} : { scope: detail.scope }),
+  ...(detail.source === undefined ? {} : { source: detail.source }),
+});
 
 function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
@@ -144,11 +215,19 @@ export class ClaudeMcpStatus extends Context.Service<
     /**
      * Every MCP server Claude would load in `cwd`, with the disabled list that
      * applies to `projectId` honoured. Cached for five minutes per directory
-     * and list.
+     * and list; `fresh` drops that one entry and asks Claude again.
      */
     readonly probe: (
       input: ClaudeMcpStatusInput,
     ) => Effect.Effect<ClaudeMcpStatusResult, ClaudeMcpStatusError>;
+    /**
+     * One server's redacted detail, read from the same cached probe as
+     * {@link probe} and probing on a miss. `server` is null when Claude no
+     * longer reports that name.
+     */
+    readonly detail: (
+      input: ClaudeMcpServerDetailInput,
+    ) => Effect.Effect<ClaudeMcpServerDetailResult, ClaudeMcpStatusError>;
     /**
      * Turns one server on or off: saves it to the environment's disabled list
      * (or the project's own, seeded from what applies to it) and switches it
@@ -237,9 +316,9 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
       return yield* new ClaudeMcpStatusError({ reason: "timeout" });
     }
     return {
-      servers: settled.value.map((server) => toReport(server, disabled)),
+      servers: settled.value.map((server) => toDetail(server, disabled)),
       checkedAt: DateTime.formatIso(yield* DateTime.now),
-    } satisfies ClaudeMcpStatusResult;
+    } satisfies ProbeResult;
   });
 
   // Cache.get dedupes concurrent lookups for a key; only successes are kept.
@@ -248,6 +327,21 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
     capacity: CACHE_CAPACITY,
     timeToLive: (exit) => (Exit.isSuccess(exit) ? CACHE_TTL : Duration.zero),
   });
+
+  // Keys with a fresh probe in flight: a second fresh request joins it rather
+  // than dropping it and starting another Claude process. The Cache alone can't
+  // tell: `invalidate` drops an in-flight entry too, and `refresh` always runs
+  // a new lookup.
+  const freshInFlight = MutableHashSet.empty<ProbeKey>();
+  const probeFresh = (key: ProbeKey) =>
+    Effect.suspend(() => {
+      if (MutableHashSet.has(freshInFlight, key)) return Cache.get(cache, key);
+      MutableHashSet.add(freshInFlight, key);
+      return Cache.invalidate(cache, key).pipe(
+        Effect.andThen(Cache.get(cache, key)),
+        Effect.ensuring(Effect.sync(() => MutableHashSet.remove(freshInFlight, key))),
+      );
+    });
 
   const setServerEnabled = Effect.fn("ClaudeMcpStatus.setServerEnabled")(
     function* (input: SetClaudeMcpServerEnabledInput) {
@@ -306,17 +400,36 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
     if (!reconnected) return yield* new ClaudeMcpReconnectError({ reason: "noSession" });
   });
 
+  const cachedProbe = Effect.fnUntraced(function* (input: {
+    readonly cwd: string;
+    readonly projectId?: ProjectId | undefined;
+    readonly fresh?: boolean | undefined;
+  }) {
+    const settings = yield* settingsService.getSettings.pipe(
+      Effect.mapError((cause) => new ClaudeMcpStatusError({ reason: "settings", cause })),
+    );
+    const key = new ProbeKey({
+      cwd: input.cwd,
+      disabledServers: [...disabledServersFor(settings, input.projectId)],
+    });
+    return yield* input.fresh === true ? probeFresh(key) : Cache.get(cache, key);
+  });
+
   return ClaudeMcpStatus.of({
-    probe: Effect.fnUntraced(function* ({ cwd, projectId }) {
-      const settings = yield* settingsService.getSettings.pipe(
-        Effect.mapError((cause) => new ClaudeMcpStatusError({ reason: "settings", cause })),
-      );
-      const key = new ProbeKey({
-        cwd,
-        disabledServers: [...disabledServersFor(settings, projectId)],
-      });
-      return yield* Cache.get(cache, key);
-    }),
+    probe: (input) =>
+      cachedProbe(input).pipe(
+        Effect.map((result): ClaudeMcpStatusResult => ({
+          servers: result.servers.map(toReport),
+          checkedAt: result.checkedAt,
+        })),
+      ),
+    detail: (input) =>
+      cachedProbe(input).pipe(
+        Effect.map((result): ClaudeMcpServerDetailResult => ({
+          server: result.servers.find((server) => server.name === input.name) ?? null,
+          checkedAt: result.checkedAt,
+        })),
+      ),
     setServerEnabled,
     reconnectServer,
   });

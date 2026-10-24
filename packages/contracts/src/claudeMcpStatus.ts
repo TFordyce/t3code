@@ -38,6 +38,8 @@ export const ClaudeMcpStatusInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   /** Whose disabled list applies: the project's override, else the environment's. */
   projectId: Schema.optional(ProjectId),
+  /** Skip the server's cached probe and ask Claude again (Refresh, after a reconnect). */
+  fresh: Schema.optional(Schema.Boolean),
 });
 export type ClaudeMcpStatusInput = typeof ClaudeMcpStatusInput.Type;
 
@@ -46,6 +48,47 @@ export const ClaudeMcpStatusResult = Schema.Struct({
   checkedAt: IsoDateTime,
 });
 export type ClaudeMcpStatusResult = typeof ClaudeMcpStatusResult.Type;
+
+/** How Claude reaches a server: `claudeai` is a claude.ai connector, `sdk` an in-process server. */
+export const ClaudeMcpTransportKind = Schema.Literals(["stdio", "http", "sse", "claudeai", "sdk"]);
+export type ClaudeMcpTransportKind = typeof ClaudeMcpTransportKind.Type;
+
+export const ClaudeMcpToolDetail = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  readOnly: Schema.Boolean,
+  destructive: Schema.Boolean,
+});
+export type ClaudeMcpToolDetail = typeof ClaudeMcpToolDetail.Type;
+
+/**
+ * One server as Claude reports it, redacted on the server: headers, env, args
+ * and URL query strings never cross the wire. `url` is set for remote servers
+ * (without its query string), `command` only names the stdio executable.
+ */
+export const ClaudeMcpServerDetail = Schema.Struct({
+  ...ClaudeMcpServerReport.fields,
+  serverInfo: Schema.optional(Schema.Struct({ name: Schema.String, version: Schema.String })),
+  transport: Schema.optional(ClaudeMcpTransportKind),
+  url: Schema.optional(Schema.String),
+  command: Schema.optional(Schema.String),
+  tools: Schema.Array(ClaudeMcpToolDetail),
+});
+export type ClaudeMcpServerDetail = typeof ClaudeMcpServerDetail.Type;
+
+export const ClaudeMcpServerDetailInput = Schema.Struct({
+  cwd: ClaudeMcpStatusInput.fields.cwd,
+  projectId: ClaudeMcpStatusInput.fields.projectId,
+  name: TrimmedNonEmptyString,
+});
+export type ClaudeMcpServerDetailInput = typeof ClaudeMcpServerDetailInput.Type;
+
+export const ClaudeMcpServerDetailResult = Schema.Struct({
+  /** Null when Claude no longer reports a server by that name. */
+  server: Schema.NullOr(ClaudeMcpServerDetail),
+  checkedAt: IsoDateTime,
+});
+export type ClaudeMcpServerDetailResult = typeof ClaudeMcpServerDetailResult.Type;
 
 export class ClaudeMcpStatusError extends Schema.TaggedError<ClaudeMcpStatusError>()(
   "ClaudeMcpStatusError",

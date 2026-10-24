@@ -86,6 +86,10 @@ A server you added in T3 Code appears as one row with both its settings and Clau
 status. Servers only Claude knows about are listed under their level with **Disable** or
 **Enable**, but T3 Code can't edit them: change their configuration in Claude Code.
 
+Click a Claude-only server's name, in Settings or a thread's **MCP** panel, to see what Claude
+reports about it, including why it failed and which tools it offers. Sign-in still happens
+outside T3 Code: the details only point you to claude.ai or `/mcp` in Claude Code.
+
 This page shows user-level and organization-level servers. Servers tied to a project, such as
 those from the project's `.mcp.json`, appear in the **MCP** panel of a thread in that project
 instead, because they only apply there. Other providers that support MCP servers don't report
@@ -102,17 +106,19 @@ from Settings applies to the whole environment.
 
 ### Reconnect a server
 
-If a Claude server has failed, its row shows **Reconnect**. In a thread's **MCP** panel it
-reconnects the server in that thread's running session and then re-checks the list so you can
-see whether it recovered. On the settings page there is no session, so **Reconnect** is
-disabled with the reason "No active session".
+If a Claude server has failed, its row shows **Reconnect**; a Claude-only server's details
+offer it for any server that isn't disabled. In a
+thread's **MCP** panel it reconnects the server in that thread's running session and then
+re-checks the list so you can see whether it recovered. On the settings page it asks Claude
+again from scratch, which starts the server anew.
 
 ### Servers that need sign-in
 
 A Claude server that shows **Needs sign-in** can't be signed in from T3 Code. For a
 `claude.ai` connector, follow the link to claude.ai to connect it. For any other server, run
-`/mcp` in Claude Code and authenticate there. Servers you added in T3 Code keep their
-[sign-in](#sign-in-to-a-server) button.
+`/mcp` in Claude Code and authenticate there; to sign a connected remote server out, clear its
+sign-in from `/mcp` too. T3 Code never reads or changes Claude's stored sign-ins. Servers you
+added in T3 Code keep their [sign-in](#sign-in-to-a-server) button.
 
 ## When changes apply
 
