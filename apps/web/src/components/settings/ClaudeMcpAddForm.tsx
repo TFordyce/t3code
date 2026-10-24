@@ -8,13 +8,17 @@
  */
 import {
   claudeMcpServerNameError,
+  ClaudeMcpHttpServerConfig,
+  MCP_HEADER_NAME_PATTERN,
   type AddClaudeMcpServerInput,
   type ClaudeMcpAddScope,
+  type ClaudeMcpAddServerConfig,
   type EnvironmentId,
   type ProjectId,
 } from "@t3tools/contracts";
 import { PlusIcon, XIcon } from "lucide-react";
 import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
 
@@ -31,19 +35,45 @@ const SCOPE_NOTES: Record<ClaudeMcpAddScope, string> = {
   local: "Saved to Claude's local config, private to this project on this environment.",
 };
 
-interface EnvRow {
+type Transport = ClaudeMcpAddServerConfig["type"];
+
+/** An env variable or header while editing. */
+interface PairRow {
   /** Stable React key: rows are removed from the middle. */
   readonly key: number;
   readonly name: string;
   readonly value: string;
 }
 
-function envError(rows: ReadonlyArray<EnvRow>): string | undefined {
-  const names = rows.map((row) => row.name.trim()).filter((name) => name.length > 0);
-  if (rows.some((row) => row.name.trim().length === 0 && row.value.length > 0)) {
-    return "Each variable needs a name.";
-  }
+const isHttpUrl = Schema.is(ClaudeMcpHttpServerConfig.fields.url);
+
+const filledNames = (rows: ReadonlyArray<PairRow>) =>
+  rows.map((row) => row.name.trim()).filter((name) => name.length > 0);
+
+const recordFrom = (rows: ReadonlyArray<PairRow>) =>
+  Object.fromEntries(
+    rows.filter((row) => row.name.trim().length > 0).map((row) => [row.name.trim(), row.value]),
+  );
+
+const hasUnnamedValue = (rows: ReadonlyArray<PairRow>) =>
+  rows.some((row) => row.name.trim().length === 0 && row.value.length > 0);
+
+function envError(rows: ReadonlyArray<PairRow>): string | undefined {
+  const names = filledNames(rows);
+  if (hasUnnamedValue(rows)) return "Each variable needs a name.";
   if (new Set(names).size !== names.length) return "Each variable can be set once.";
+  return undefined;
+}
+
+function headersError(rows: ReadonlyArray<PairRow>): string | undefined {
+  const names = filledNames(rows);
+  if (hasUnnamedValue(rows)) return "Each header needs a name.";
+  const invalid = names.find((name) => !MCP_HEADER_NAME_PATTERN.test(name));
+  if (invalid !== undefined) return `"${invalid}" is not a valid header name.`;
+  // Header names are case-insensitive, so two spellings are one header.
+  if (new Set(names.map((name) => name.toLowerCase())).size !== names.length) {
+    return "Each header can be set once.";
+  }
   return undefined;
 }
 
@@ -65,42 +95,51 @@ export function ClaudeMcpAddForm(props: {
   });
   const [scope, setScope] = useState(props.scopes[0]);
   const [name, setName] = useState("");
+  const [transport, setTransport] = useState<Transport>("stdio");
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
-  const [env, setEnv] = useState<ReadonlyArray<EnvRow>>([]);
+  const [env, setEnv] = useState<ReadonlyArray<PairRow>>([]);
+  const [url, setUrl] = useState("");
+  const [headers, setHeaders] = useState<ReadonlyArray<PairRow>>([]);
   const nextKey = useRef(0);
+  const newRow = (): PairRow => ({ key: nextKey.current++, name: "", value: "" });
   const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
+  const stdio = transport === "stdio";
+  // Only the chosen transport's fields count; the other's stay as typed.
   const errors = {
     name: claudeMcpServerNameError(name.trim(), props.t3Names),
-    command: command.trim().length === 0 ? "Enter the command that starts the server." : undefined,
-    env: envError(env),
+    command:
+      stdio && command.trim().length === 0
+        ? "Enter the command that starts the server."
+        : undefined,
+    env: stdio ? envError(env) : undefined,
+    url: !stdio && !isHttpUrl(url.trim()) ? "Enter the server's http(s) URL." : undefined,
+    headers: stdio ? undefined : headersError(headers),
   };
   const hasErrors = Object.values(errors).some((error) => error !== undefined);
-  const setRow = (index: number, row: EnvRow) =>
-    setEnv(env.map((existing, at) => (at === index ? row : existing)));
 
   const submit = async () => {
+    const server: ClaudeMcpAddServerConfig =
+      transport === "stdio"
+        ? {
+            type: "stdio",
+            command: command.trim(),
+            args: args
+              .split("\n")
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0),
+            env: recordFrom(env),
+          }
+        : { type: "http", url: url.trim(), headers: recordFrom(headers) };
     const input: AddClaudeMcpServerInput = {
       cwd: props.cwd,
       ...(props.projectId === undefined ? {} : { projectId: props.projectId }),
       name: name.trim(),
       scope,
-      server: {
-        type: "stdio",
-        command: command.trim(),
-        args: args
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0),
-        env: Object.fromEntries(
-          env
-            .filter((row) => row.name.trim().length > 0)
-            .map((row) => [row.name.trim(), row.value]),
-        ),
-      },
+      server,
     };
     const result = await add({ environmentId: props.environmentId, input });
     if (AsyncResult.isSuccess(result)) {
@@ -135,78 +174,83 @@ export function ClaudeMcpAddForm(props: {
         />
         {touched && errors.name ? <FieldError>{errors.name}</FieldError> : null}
       </label>
-      <label className="block space-y-1">
-        <span className="text-xs font-medium text-foreground">Command</span>
-        <Input
-          aria-label="Command"
-          aria-invalid={touched && errors.command !== undefined}
-          font="mono"
-          autoCapitalize="none"
-          spellCheck={false}
-          placeholder="npx"
-          value={command}
-          onChange={(event) => setCommand(event.target.value)}
-        />
-        {touched && errors.command ? <FieldError>{errors.command}</FieldError> : null}
-      </label>
-      <label className="block space-y-1">
-        <span className="text-xs font-medium text-foreground">Arguments, one per line</span>
-        <Textarea
-          aria-label="Arguments"
-          spellCheck={false}
-          placeholder={"-y\n@modelcontextprotocol/server-github"}
-          value={args}
-          onChange={(event) => setArgs(event.target.value)}
-        />
-      </label>
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-foreground">Environment variables</span>
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            onClick={() => setEnv([...env, { key: nextKey.current++, name: "", value: "" }])}
-          >
-            <PlusIcon aria-hidden />
-            Add variable
-          </Button>
-        </div>
-        {env.map((row, index) => (
-          <div key={row.key} className="flex items-center gap-2">
+      <ToggleGroup
+        aria-label="Transport"
+        variant="segmented"
+        value={[transport]}
+        onValueChange={(next) => {
+          const value = next[0];
+          if (value === "stdio" || value === "http") setTransport(value);
+        }}
+      >
+        <Toggle value="stdio">Command</Toggle>
+        <Toggle value="http">HTTP</Toggle>
+      </ToggleGroup>
+      {transport === "stdio" ? (
+        <>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-foreground">Command</span>
             <Input
-              aria-label="Variable name"
+              aria-label="Command"
+              aria-invalid={touched && errors.command !== undefined}
               font="mono"
               autoCapitalize="none"
               spellCheck={false}
-              placeholder="NAME"
-              value={row.name}
-              onChange={(event) => setRow(index, { ...row, name: event.target.value })}
+              placeholder="npx"
+              value={command}
+              onChange={(event) => setCommand(event.target.value)}
             />
-            <Input
-              aria-label="Variable value"
-              font="mono"
-              autoComplete="off"
+            {touched && errors.command ? <FieldError>{errors.command}</FieldError> : null}
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-foreground">Arguments, one per line</span>
+            <Textarea
+              aria-label="Arguments"
               spellCheck={false}
-              placeholder="value"
-              value={row.value}
-              onChange={(event) => setRow(index, { ...row, value: event.target.value })}
+              placeholder={"-y\n@modelcontextprotocol/server-github"}
+              value={args}
+              onChange={(event) => setArgs(event.target.value)}
             />
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Remove variable"
-              onClick={() => setEnv(env.filter((_, at) => at !== index))}
-            >
-              <XIcon aria-hidden />
-            </Button>
-          </div>
-        ))}
-        {touched && errors.env ? <FieldError>{errors.env}</FieldError> : null}
-      </div>
+          </label>
+          <PairRows
+            title="Environment variables"
+            noun="variable"
+            namePlaceholder="NAME"
+            rows={env}
+            onChange={setEnv}
+            newRow={newRow}
+            error={touched ? errors.env : undefined}
+          />
+        </>
+      ) : (
+        <>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-foreground">URL</span>
+            <Input
+              aria-label="URL"
+              aria-invalid={touched && errors.url !== undefined}
+              font="mono"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="https://mcp.example.com/mcp"
+              value={url}
+              onChange={(event) => setUrl(event.target.value)}
+            />
+            {touched && errors.url ? <FieldError>{errors.url}</FieldError> : null}
+          </label>
+          <PairRows
+            title="Headers"
+            noun="header"
+            namePlaceholder="Authorization"
+            rows={headers}
+            onChange={setHeaders}
+            newRow={newRow}
+            error={touched ? errors.headers : undefined}
+          />
+        </>
+      )}
       <p className="text-xs text-muted-foreground">
-        Claude saves these as plain text in ~/.claude.json.
+        Claude saves environment variables and headers as plain text in ~/.claude.json.
       </p>
       {props.scopes.length > 1 ? (
         <ToggleGroup
@@ -242,6 +286,70 @@ export function ClaudeMcpAddForm(props: {
         </Button>
       </div>
     </form>
+  );
+}
+
+/** Name and value rows for env variables or headers. */
+function PairRows(props: {
+  readonly title: string;
+  /** Lowercase, as in "Add variable" and "Variable name". */
+  readonly noun: string;
+  readonly namePlaceholder: string;
+  readonly rows: ReadonlyArray<PairRow>;
+  readonly onChange: (rows: ReadonlyArray<PairRow>) => void;
+  readonly newRow: () => PairRow;
+  readonly error: string | undefined;
+}) {
+  const label = props.noun.charAt(0).toUpperCase() + props.noun.slice(1);
+  const setRow = (index: number, row: PairRow) =>
+    props.onChange(props.rows.map((existing, at) => (at === index ? row : existing)));
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-foreground">{props.title}</span>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          onClick={() => props.onChange([...props.rows, props.newRow()])}
+        >
+          <PlusIcon aria-hidden />
+          Add {props.noun}
+        </Button>
+      </div>
+      {props.rows.map((row, index) => (
+        <div key={row.key} className="flex items-center gap-2">
+          <Input
+            aria-label={`${label} name`}
+            font="mono"
+            autoCapitalize="none"
+            spellCheck={false}
+            placeholder={props.namePlaceholder}
+            value={row.name}
+            onChange={(event) => setRow(index, { ...row, name: event.target.value })}
+          />
+          <Input
+            aria-label={`${label} value`}
+            font="mono"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="value"
+            value={row.value}
+            onChange={(event) => setRow(index, { ...row, value: event.target.value })}
+          />
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`Remove ${props.noun}`}
+            onClick={() => props.onChange(props.rows.filter((_, at) => at !== index))}
+          >
+            <XIcon aria-hidden />
+          </Button>
+        </div>
+      ))}
+      {props.error ? <FieldError>{props.error}</FieldError> : null}
+    </div>
   );
 }
 

@@ -635,6 +635,32 @@ it.effect("a local add runs at local scope with the project root as working dire
   );
 });
 
+it.effect("add passes an HTTP server to add-json as Claude's http JSON, headers included", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  const cli = makeFakeCli();
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    yield* service.addServer({
+      cwd: "/work/app",
+      name: "linear",
+      scope: "user",
+      server: {
+        type: "http",
+        url: "https://mcp.linear.app/mcp",
+        headers: { Authorization: 'Bearer "x" %PATH% !bang' },
+      },
+    });
+    const call = cli.calls[0]!;
+    assert.deepStrictEqual(call.args.slice(0, 3), ["mcp", "add-json", "linear"]);
+    assert.deepStrictEqual(JSON.parse(call.args[3]!), {
+      type: "http",
+      url: "https://mcp.linear.app/mcp",
+      headers: { Authorization: 'Bearer "x" %PATH% !bang' },
+    });
+    assert.deepStrictEqual(call.args.slice(4), ["-s", "user"]);
+  }).pipe(Effect.provide(layerFor(fake.query, {}, cli.runCli)));
+});
+
 it.effect("remove runs Claude with the probe's Claude home", () => {
   const fake = makeFakeQuery(() => Promise.resolve([]));
   const cli = makeFakeCli();

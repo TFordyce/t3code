@@ -7,7 +7,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { BUILT_IN_MCP_SERVER_NAME } from "./mcpServers.ts";
+import { BUILT_IN_MCP_SERVER_NAME, McpHttpServerConfig, McpServerHeader } from "./mcpServers.ts";
 
 /** Mirrors the status values the Claude Agent SDK reports for a loaded MCP server. */
 export const ClaudeMcpServerStatusValue = Schema.Literals([
@@ -237,8 +237,19 @@ export const ClaudeMcpStdioServerConfig = Schema.Struct({
 });
 export type ClaudeMcpStdioServerConfig = typeof ClaudeMcpStdioServerConfig.Type;
 
+/** A streamable HTTP server, in the JSON shape `claude mcp add-json` takes. */
+export const ClaudeMcpHttpServerConfig = Schema.Struct({
+  type: Schema.Literal("http"),
+  url: McpHttpServerConfig.fields.url,
+  headers: Schema.Record(McpServerHeader.fields.name, Schema.String),
+});
+export type ClaudeMcpHttpServerConfig = typeof ClaudeMcpHttpServerConfig.Type;
+
 /** The server config passed to Claude as-is; each transport is one member. */
-export const ClaudeMcpAddServerConfig = Schema.Union([ClaudeMcpStdioServerConfig]);
+export const ClaudeMcpAddServerConfig = Schema.Union([
+  ClaudeMcpStdioServerConfig,
+  ClaudeMcpHttpServerConfig,
+]);
 export type ClaudeMcpAddServerConfig = typeof ClaudeMcpAddServerConfig.Type;
 
 /**
