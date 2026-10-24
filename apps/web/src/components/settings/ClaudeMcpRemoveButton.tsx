@@ -86,9 +86,8 @@ export function ClaudeMcpRemoveButton(props: {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {props.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Claude removes it from its {props.scope === "user" ? "user" : "local"} config, so
-              plain claude and other Claude hosts stop loading it too. Running sessions keep it
-              until they restart.
+              Claude removes it from its {props.scope} config, so plain claude and other Claude
+              hosts stop loading it too. Running sessions keep it until they restart.
             </AlertDialogDescription>
             {error === null ? null : <p className="text-sm text-destructive">{error}</p>}
           </AlertDialogHeader>
