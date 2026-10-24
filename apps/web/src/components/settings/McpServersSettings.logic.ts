@@ -154,6 +154,28 @@ const isHttpUrl = (value: string) => {
   }
 };
 
+/** Why a server's header names can't be saved, or undefined when they can. Shared with Claude's add form. */
+export function headerNamesError(names: ReadonlyArray<string>): string | undefined {
+  const invalid = names.find((name) => !MCP_HEADER_NAME_PATTERN.test(name));
+  if (invalid !== undefined) return `"${invalid}" is not a valid header name.`;
+  // Header names are case-insensitive, so two spellings are one header.
+  if (new Set(names.map((name) => name.toLowerCase())).size !== names.length) {
+    return "Each header can be set once.";
+  }
+  return undefined;
+}
+
+/** Why a server's environment variable names can't be saved, or undefined when they can. Shared with Claude's add form. */
+export function envNamesError(names: ReadonlyArray<string>): string | undefined {
+  const invalid = names.find((name) => !isEnvironmentVariableName(name));
+  if (invalid !== undefined) return `"${invalid}" is not a valid variable name.`;
+  if (new Set(names).size !== names.length) return "Each variable can be set once.";
+  return undefined;
+}
+
+const filledNames = (rows: ReadonlyArray<{ readonly name: string }>) =>
+  rows.map((row) => row.name.trim()).filter((name) => name.length > 0);
+
 /** Field errors for a draft; an empty object means it can be saved. */
 export function validateDraft(
   draft: McpServerDraft,
@@ -171,15 +193,8 @@ export function validateDraft(
 
   if (draft.transport === "http") {
     if (!isHttpUrl(draft.url.trim())) errors.url = "Enter the server's http(s) URL.";
-    const names = draft.headers
-      .map((row) => row.name.trim())
-      .filter((rowName) => rowName.length > 0);
-    const invalid = names.find((rowName) => !MCP_HEADER_NAME_PATTERN.test(rowName));
-    if (invalid !== undefined) {
-      errors.headers = `"${invalid}" is not a valid header name.`;
-    } else if (new Set(names.map((rowName) => rowName.toLowerCase())).size !== names.length) {
-      errors.headers = "Each header can be set once.";
-    }
+    const headers = headerNamesError(filledNames(draft.headers));
+    if (headers !== undefined) errors.headers = headers;
     if (draft.oauthClientId.trim().length === 0 && draft.oauthClientSecret.length > 0) {
       errors.oauthClientId = "Enter the client ID that goes with this secret.";
     }
@@ -189,13 +204,8 @@ export function validateDraft(
   if (draft.command.trim().length === 0)
     errors.command = "Enter the command that starts the server.";
 
-  const names = draft.env.map((row) => row.name.trim()).filter((rowName) => rowName.length > 0);
-  const invalid = names.find((rowName) => !isEnvironmentVariableName(rowName));
-  if (invalid !== undefined) {
-    errors.env = `"${invalid}" is not a valid variable name.`;
-  } else if (new Set(names).size !== names.length) {
-    errors.env = "Each variable can be set once.";
-  }
+  const env = envNamesError(filledNames(draft.env));
+  if (env !== undefined) errors.env = env;
   return errors;
 }
 

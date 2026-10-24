@@ -1,12 +1,13 @@
 /**
  * Remove for one user or local Claude MCP server. After a confirm step it runs
- * `claude mcp remove` on the environment's host, then calls `onRemoved` to ask
- * Claude again. Claude's own error stays in the confirm dialog. Hidden when the
- * session lacks the grant, since the server would refuse the request.
+ * `claude mcp remove` on the environment's host, which re-probes the list, then
+ * calls `onRemoved` to re-read it. Claude's own error stays in the confirm
+ * dialog. Hidden when the session lacks the grant, since the server would
+ * refuse the request, and for a local server outside a project.
  *
  * @module ClaudeMcpRemoveButton
  */
-import type { ClaudeMcpRemovableScope, EnvironmentId } from "@t3tools/contracts";
+import type { ClaudeMcpScope, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
@@ -28,10 +29,12 @@ import { Button } from "../ui/button";
 export function ClaudeMcpRemoveButton(props: {
   readonly environmentId: EnvironmentId;
   readonly name: string;
-  readonly scope: ClaudeMcpRemovableScope;
-  /** The directory the server was probed in; it picks a local server's project. */
+  readonly scope: ClaudeMcpScope;
+  /** The directory the list was probed in, which the server re-probes. */
   readonly cwd: string;
-  /** Asks Claude again once the server is removed. */
+  /** The list's project; a local server is removed from this project. */
+  readonly projectId?: ProjectId | undefined;
+  /** Re-reads the list once the server is removed. */
   readonly onRemoved?: (() => void) | undefined;
   /** Held while a probe is already running. */
   readonly disabled?: boolean | undefined;
@@ -46,14 +49,21 @@ export function ClaudeMcpRemoveButton(props: {
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  if (!canRemove) return null;
+  const { cwd, name, projectId } = props;
+  const input =
+    props.scope === "user"
+      ? { scope: "user" as const, name, cwd, projectId }
+      : projectId === undefined
+        ? null
+        : { scope: "local" as const, name, cwd, projectId };
+  if (!canRemove || input === null) return null;
 
   const confirm = () => {
     setRemoving(true);
     setError(null);
     void remove({
       environmentId: props.environmentId,
-      input: { name: props.name, scope: props.scope, cwd: props.cwd },
+      input,
     }).then((result) => {
       setRemoving(false);
       if (AsyncResult.isSuccess(result)) {

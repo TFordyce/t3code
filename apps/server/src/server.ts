@@ -633,7 +633,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
 const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(layerPtyAdapter),
   // Reaches live Claude sessions through McpProviderSessions, provided just below.
-  Layer.provideMerge(ClaudeMcpStatus.layer),
+  Layer.provideMerge(ClaudeMcpStatus.layer.pipe(Layer.provide(ProjectStore.layer))),
   Layer.provideMerge(AcpRegistrySupport.layerFromHost.pipe(Layer.provide(ProviderHostLive.layer))),
   Layer.provideMerge(
     Layer.mergeAll(

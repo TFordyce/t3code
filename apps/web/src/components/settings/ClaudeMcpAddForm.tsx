@@ -9,13 +9,13 @@
 import {
   claudeMcpServerNameError,
   ClaudeMcpHttpServerConfig,
-  MCP_HEADER_NAME_PATTERN,
   type AddClaudeMcpServerInput,
-  type ClaudeMcpAddScope,
   type ClaudeMcpAddServerConfig,
+  type ClaudeMcpScope,
   type EnvironmentId,
   type ProjectId,
 } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { PlusIcon, XIcon } from "lucide-react";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
@@ -29,10 +29,18 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import { FieldError } from "./FieldError";
+import { envNamesError, headerNamesError } from "./McpServersSettings.logic";
 
-const SCOPE_NOTES: Record<ClaudeMcpAddScope, string> = {
-  user: "Saved to Claude's user config on this environment, for every project.",
-  local: "Saved to Claude's local config, private to this project on this environment.",
+const SCOPES: Record<ClaudeMcpScope, { readonly label: string; readonly note: string }> = {
+  user: {
+    label: "User",
+    note: "Saved to Claude's user config on this environment, for every project.",
+  },
+  local: {
+    label: "Local",
+    note: "Saved to Claude's local config, private to this project on this environment.",
+  },
 };
 
 type Transport = ClaudeMcpAddServerConfig["type"];
@@ -58,32 +66,48 @@ const recordFrom = (rows: ReadonlyArray<PairRow>) =>
 const hasUnnamedValue = (rows: ReadonlyArray<PairRow>) =>
   rows.some((row) => row.name.trim().length === 0 && row.value.length > 0);
 
-function envError(rows: ReadonlyArray<PairRow>): string | undefined {
-  const names = filledNames(rows);
-  if (hasUnnamedValue(rows)) return "Each variable needs a name.";
-  if (new Set(names).size !== names.length) return "Each variable can be set once.";
-  return undefined;
-}
+// Unlike T3's own form, a value with no name would be dropped silently, so it's an error here.
+const envError = (rows: ReadonlyArray<PairRow>) =>
+  hasUnnamedValue(rows) ? "Each variable needs a name." : envNamesError(filledNames(rows));
 
-function headersError(rows: ReadonlyArray<PairRow>): string | undefined {
-  const names = filledNames(rows);
-  if (hasUnnamedValue(rows)) return "Each header needs a name.";
-  const invalid = names.find((name) => !MCP_HEADER_NAME_PATTERN.test(name));
-  if (invalid !== undefined) return `"${invalid}" is not a valid header name.`;
-  // Header names are case-insensitive, so two spellings are one header.
-  if (new Set(names.map((name) => name.toLowerCase())).size !== names.length) {
-    return "Each header can be set once.";
-  }
-  return undefined;
+const headersError = (rows: ReadonlyArray<PairRow>) =>
+  hasUnnamedValue(rows) ? "Each header needs a name." : headerNamesError(filledNames(rows));
+
+/**
+ * The Add button's state, shared by "Claude's servers" and the thread panel:
+ * whether this session may add, whether the form is open, and the server just
+ * added. `onAdded` re-reads the list, which the server has already re-probed.
+ */
+export function useClaudeMcpAdd(environmentId: EnvironmentId, onAdded: () => void) {
+  const canAdd = useAtomValue(serverEnvironment.addClaudeMcpServer.permissionAtom(environmentId));
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState<string | null>(null);
+  return {
+    canAdd,
+    adding,
+    added,
+    open: () => {
+      setAdded(null);
+      setAdding(true);
+    },
+    cancel: () => setAdding(false),
+    finish: (name: string) => {
+      setAdding(false);
+      setAdded(name);
+      onAdded();
+    },
+    dismiss: () => setAdded(null),
+  };
 }
 
 export function ClaudeMcpAddForm(props: {
   readonly environmentId: EnvironmentId;
-  /** The directory the list was probed in, re-probed after the add; a local add runs there. */
+  /** The directory the list was probed in, which the server re-probes after the add. */
   readonly cwd: string;
+  /** The list's project; a local add goes to this project, and needs it. */
   readonly projectId?: ProjectId | undefined;
   /** The scopes offered, the first being the default; one scope shows no choice. */
-  readonly scopes: readonly [ClaudeMcpAddScope, ...ClaudeMcpAddScope[]];
+  readonly scopes: readonly [ClaudeMcpScope, ...ClaudeMcpScope[]];
   /** Servers T3 configures here; Claude may not reuse their names. */
   readonly t3Names: ReadonlyArray<string>;
   readonly onCancel: () => void;
@@ -134,13 +158,12 @@ export function ClaudeMcpAddForm(props: {
             env: recordFrom(env),
           }
         : { type: "http", url: url.trim(), headers: recordFrom(headers) };
-    const input: AddClaudeMcpServerInput = {
-      cwd: props.cwd,
-      ...(props.projectId === undefined ? {} : { projectId: props.projectId }),
-      name: name.trim(),
-      scope,
-      server,
-    };
+    const { cwd, projectId } = props;
+    const target = { cwd, name: name.trim(), server };
+    let input: AddClaudeMcpServerInput;
+    if (scope === "user") input = { ...target, scope, projectId };
+    else if (projectId !== undefined) input = { ...target, scope, projectId };
+    else return setFailure("Pick a project to add a local server.");
     const result = await add({ environmentId: props.environmentId, input });
     if (AsyncResult.isSuccess(result)) {
       props.onAdded(input.name);
@@ -264,13 +287,13 @@ export function ClaudeMcpAddForm(props: {
         >
           {props.scopes.map((candidate) => (
             <Toggle key={candidate} value={candidate}>
-              {candidate === "local" ? "Local" : "User"}
+              {SCOPES[candidate].label}
             </Toggle>
           ))}
         </ToggleGroup>
       ) : null}
       <p className="text-xs text-muted-foreground">
-        {SCOPE_NOTES[scope]} It applies to new Claude sessions.
+        {SCOPES[scope].note} It applies to new Claude sessions.
       </p>
       {failure === null ? null : (
         <Alert variant="error">
@@ -350,14 +373,6 @@ function PairRows(props: {
       ))}
       {props.error ? <FieldError>{props.error}</FieldError> : null}
     </div>
-  );
-}
-
-function FieldError({ children }: { readonly children: string }) {
-  return (
-    <p role="alert" className="text-xs text-destructive">
-      {children}
-    </p>
   );
 }
 

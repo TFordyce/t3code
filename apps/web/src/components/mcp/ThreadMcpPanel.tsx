@@ -18,10 +18,13 @@ import type {
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { PlusIcon } from "lucide-react";
-import { useState } from "react";
 
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
-import { ClaudeMcpAddForm, ClaudeMcpAddedNotice } from "../settings/ClaudeMcpAddForm";
+import {
+  ClaudeMcpAddForm,
+  ClaudeMcpAddedNotice,
+  useClaudeMcpAdd,
+} from "../settings/ClaudeMcpAddForm";
 import { ClaudeMcpGroups, useClaudeMcpStatus } from "../settings/ClaudeMcpServers";
 import { Badge } from "../ui/badge";
 import { ClaudeMcpReconnectButton } from "../settings/ClaudeMcpReconnectButton";
@@ -66,11 +69,7 @@ export function ThreadMcpPanel(props: {
     providers,
     t3Names: rows.map((row) => row.name),
   });
-  const canAdd = useAtomValue(
-    serverEnvironment.addClaudeMcpServer.permissionAtom(props.environmentId),
-  );
-  const [adding, setAdding] = useState(false);
-  const [added, setAdded] = useState<string | null>(null);
+  const add = useClaudeMcpAdd(props.environmentId, claude.reload);
   const { cwd, projectId } = props;
 
   return (
@@ -78,15 +77,8 @@ export function ThreadMcpPanel(props: {
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-medium">MCP servers</h2>
         <div className="flex items-center gap-2">
-          {canAdd && claude.probes && projectId !== null && !adding ? (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => {
-                setAdded(null);
-                setAdding(true);
-              }}
-            >
+          {add.canAdd && claude.probes && projectId !== null && !add.adding ? (
+            <Button size="xs" variant="outline" onClick={add.open}>
               <PlusIcon aria-hidden />
               Add to Claude
             </Button>
@@ -100,23 +92,19 @@ export function ThreadMcpPanel(props: {
           </Button>
         </div>
       </div>
-      {adding && cwd !== null && projectId !== null ? (
+      {add.adding && cwd !== null && projectId !== null ? (
         <ClaudeMcpAddForm
           environmentId={props.environmentId}
           cwd={cwd}
           projectId={projectId}
           scopes={["local"]}
           t3Names={rows.map((row) => row.name)}
-          onCancel={() => setAdding(false)}
-          onAdded={(name) => {
-            setAdding(false);
-            setAdded(name);
-            claude.reload();
-          }}
+          onCancel={add.cancel}
+          onAdded={add.finish}
         />
       ) : null}
-      {added === null ? null : (
-        <ClaudeMcpAddedNotice name={added} onDismiss={() => setAdded(null)} />
+      {add.added === null ? null : (
+        <ClaudeMcpAddedNotice name={add.added} onDismiss={add.dismiss} />
       )}
       {rows.length === 0 ? (
         <p className="text-sm text-muted-foreground">
@@ -166,6 +154,7 @@ export function ThreadMcpPanel(props: {
             threadId={props.threadId}
             groups={claude.view.projectGroups}
             onReprobe={claude.refresh}
+            onChanged={claude.reload}
             probing={claude.isPending}
           />
         </div>

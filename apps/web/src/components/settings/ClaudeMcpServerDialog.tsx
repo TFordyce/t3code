@@ -3,9 +3,10 @@
  * row. The detail is read from the server's cached probe (probing on a miss)
  * and follows the list in place when it is refreshed, so Reconnect and
  * Enable/Disable (both followed by `onReprobe`, a fresh probe) update the open
- * dialog. Remove, for user and local servers, re-probes the same way, so the
- * dialog turns to "no longer reports". While any probe runs the dialog shows a
- * spinner and holds its actions.
+ * dialog. Remove, for user and local servers, re-probes on the server and is
+ * followed by `onChanged`, a re-read, so the dialog turns to "no longer
+ * reports". While any probe runs the dialog shows a spinner and holds its
+ * actions.
  *
  * @module ClaudeMcpServerDialog
  */
@@ -198,6 +199,7 @@ function ClaudeMcpServerActions(props: {
   readonly projectId?: ProjectId | undefined;
   readonly threadId?: ThreadId | undefined;
   readonly onReprobe?: (() => void) | undefined;
+  readonly onChanged?: (() => void) | undefined;
 }) {
   const { view } = props;
   if (view.kind !== "server") return null;
@@ -230,7 +232,8 @@ function ClaudeMcpServerActions(props: {
           name={view.name}
           scope={view.removeScope}
           cwd={props.cwd}
-          onRemoved={props.onReprobe}
+          projectId={props.projectId}
+          onRemoved={props.onChanged}
           disabled={view.refreshing}
         />
       )}
@@ -244,8 +247,10 @@ export function ClaudeMcpServerDialog(props: {
   readonly projectId?: ProjectId | undefined;
   /** The thread whose running Claude process Reconnect reaches; absent on Settings. */
   readonly threadId?: ThreadId | undefined;
-  /** Asks Claude again; runs after Reconnect, a toggle or Remove, and is Reconnect without a thread. */
+  /** Asks Claude again; runs after Reconnect or a toggle, and is Reconnect without a thread. */
   readonly onReprobe?: (() => void) | undefined;
+  /** Re-reads the list after Remove, which the server has already re-probed. */
+  readonly onChanged?: (() => void) | undefined;
   /** A fresh probe for this directory is running. */
   readonly probing?: boolean | undefined;
   /** The open server's name; null keeps the dialog closed. */
@@ -274,6 +279,7 @@ function ClaudeMcpServerDialogBody(
   props: DetailTarget & {
     readonly threadId?: ThreadId | undefined;
     readonly onReprobe?: (() => void) | undefined;
+    readonly onChanged?: (() => void) | undefined;
     readonly probing?: boolean | undefined;
   },
 ) {
@@ -291,6 +297,7 @@ function ClaudeMcpServerDialogBody(
           projectId={props.projectId}
           threadId={props.threadId}
           onReprobe={props.onReprobe}
+          onChanged={props.onChanged}
         />
         <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
       </DialogFooter>

@@ -147,8 +147,17 @@ describe("removing a Claude server", () => {
 
   it("accepts the user and local scopes", () => {
     for (const scope of ["user", "local"]) {
-      expect(decodeRemove({ name: "docs", scope, cwd: "/work/app" })).toMatchObject({ scope });
+      expect(
+        decodeRemove({ name: "docs", scope, cwd: "/work/app", projectId: "project-1" }),
+      ).toMatchObject({ scope });
     }
+  });
+
+  it("needs the project for a local remove, but not for a user one", () => {
+    expect(decodeRemove({ name: "docs", scope: "user", cwd: "/work/app" })).toMatchObject({
+      scope: "user",
+    });
+    expect(() => decodeRemove({ name: "docs", scope: "local", cwd: "/work/app" })).toThrow();
   });
 
   it("refuses scopes Claude's CLI can't remove from", () => {

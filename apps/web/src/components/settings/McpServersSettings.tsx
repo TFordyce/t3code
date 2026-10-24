@@ -66,6 +66,7 @@ import {
   type McpServerDraft,
 } from "./McpServersSettings.logic";
 import { ClaudeLiveStatus, ClaudeMcpSection, useClaudeMcpStatus } from "./ClaudeMcpServers";
+import { FieldError } from "./FieldError";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { SettingsGroup } from "./SettingsGroup";
@@ -1047,13 +1048,5 @@ function SecretRows({
       ))}
       {error ? <FieldError>{error}</FieldError> : null}
     </div>
-  );
-}
-
-function FieldError({ children }: { readonly children: string }) {
-  return (
-    <p role="alert" className="text-xs text-destructive">
-      {children}
-    </p>
   );
 }

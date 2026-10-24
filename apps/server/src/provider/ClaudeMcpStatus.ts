@@ -59,6 +59,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveClaudeSdkExecutablePath } from "./Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "./Drivers/ClaudeHome.ts";
@@ -108,6 +109,13 @@ export class ClaudeCliLaunchError extends Data.TaggedError("ClaudeCliLaunchError
   readonly reason: "unsupportedLauncher" | "spawnFailed";
   readonly cause?: unknown;
 }> {}
+
+/** Why an add or a remove failed, before it becomes that RPC's error. */
+interface ClaudeConfigChangeFailure {
+  readonly reason: ClaudeMcpRemoveError["reason"];
+  readonly detail?: string;
+  readonly cause?: unknown;
+}
 
 /** Runs Claude's CLI, injectable so tests can fake the Claude process. */
 export type ClaudeMcpCli = (
@@ -317,16 +325,17 @@ export class ClaudeMcpStatus extends Context.Service<
     ) => Effect.Effect<void, ClaudeMcpReconnectError>;
     /**
      * Removes a user or local server from Claude's own config with `claude mcp
-     * remove`, in the probe's Claude environment and directory. A refusal
-     * carries Claude's own words; the caller re-probes afterwards. Running
-     * sessions keep the server until they restart.
+     * remove`, then re-probes the input's list fresh, as {@link addServer}
+     * does. A refusal carries Claude's own words. Running sessions keep the
+     * server until they restart.
      */
     readonly removeServer: (
       input: RemoveClaudeMcpServerInput,
     ) => Effect.Effect<void, ClaudeMcpRemoveError>;
     /**
      * Adds a server to Claude's own config with `claude mcp add-json`, in the
-     * probe's Claude environment, then re-probes the input's list fresh. Only
+     * probe's Claude environment (a local one in its project's workspace
+     * root), then re-probes the input's list fresh. Only
      * Claude's CLI writes its config: `~/.claude.json` is large and Claude
      * rewrites it constantly. Running sessions keep what they loaded.
      */
@@ -341,6 +350,7 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (
   const runCli = injectedCli ?? (yield* makeClaudeCli);
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const liveSessions = yield* McpProviderSessions.McpProviderSessions;
+  const projects = yield* ProjectStore.ProjectStoreV2;
   const path = yield* Path.Path;
 
   const resolveSettings = settingsService.getSettings.pipe(
@@ -498,27 +508,6 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (
     if (!reconnected) return yield* new ClaudeMcpReconnectError({ reason: "noSession" });
   });
 
-  const removeServer = Effect.fn("ClaudeMcpStatus.removeServer")(function* (
-    input: RemoveClaudeMcpServerInput,
-  ) {
-    const { settings, environment } = yield* resolveClaude.pipe(
-      Effect.mapError((cause) => new ClaudeMcpRemoveError({ reason: "settings", cause })),
-    );
-    const result = yield* runCli({
-      binaryPath: settings.binaryPath,
-      args: ["mcp", "remove", input.name, "-s", input.scope],
-      cwd: input.cwd,
-      env: environment,
-    }).pipe(Effect.mapError((cause) => new ClaudeMcpRemoveError({ reason: "startFailed", cause })));
-    if (result.code !== 0) {
-      const detail = result.stderr.trim() || result.stdout.trim();
-      return yield* new ClaudeMcpRemoveError({
-        reason: "failed",
-        ...(detail.length === 0 ? {} : { detail }),
-      });
-    }
-  });
-
   const cachedProbe = Effect.fnUntraced(function* (input: {
     readonly cwd: string;
     readonly projectId?: ProjectId | undefined;
@@ -534,6 +523,64 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (
     return yield* input.fresh === true ? probeFresh(key) : Cache.get(cache, key);
   });
 
+  const projectRoot = (projectId: ProjectId) =>
+    projects.get(projectId).pipe(
+      Effect.mapError((cause): ClaudeConfigChangeFailure => ({ reason: "project", cause })),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.fail<ClaudeConfigChangeFailure>({ reason: "project" }),
+          onSome: (project) => Effect.succeed(project.workspaceRoot),
+        }),
+      ),
+    );
+
+  /**
+   * Runs one `claude mcp` command for an add or a remove, in the probe's
+   * Claude environment, then re-probes the input's list fresh so the next read
+   * shows the change. A local change runs in its project's workspace root,
+   * which is how Claude keys local servers.
+   */
+  const changeClaudeConfig = Effect.fn("ClaudeMcpStatus.changeClaudeConfig")(function* (
+    input: RemoveClaudeMcpServerInput,
+    args: ReadonlyArray<string>,
+  ) {
+    const { settings, environment } = yield* resolveClaude.pipe(
+      Effect.mapError((cause): ClaudeConfigChangeFailure => ({ reason: "settings", cause })),
+    );
+    const cwd = input.scope === "local" ? yield* projectRoot(input.projectId) : undefined;
+    const output = yield* runCli({
+      binaryPath: settings.binaryPath,
+      args,
+      cwd,
+      env: environment,
+    }).pipe(
+      Effect.mapError((cause): ClaudeConfigChangeFailure => ({
+        reason: cause.reason === "unsupportedLauncher" ? "unsupportedLauncher" : "startFailed",
+        cause,
+      })),
+    );
+    if (output.code !== 0) {
+      const detail = output.stderr.trim() || output.stdout.trim();
+      return yield* Effect.fail<ClaudeConfigChangeFailure>({
+        reason: "rejected",
+        ...(detail.length === 0 ? {} : { detail }),
+      });
+    }
+    // The change has landed; a failed re-probe shows on the list, not here.
+    yield* cachedProbe({ cwd: input.cwd, projectId: input.projectId, fresh: true }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("claude-mcp-change-reprobe-failed", { cause }),
+      ),
+    );
+  });
+
+  const removeServer = Effect.fn("ClaudeMcpStatus.removeServer")(
+    (input: RemoveClaudeMcpServerInput) =>
+      changeClaudeConfig(input, ["mcp", "remove", input.name, "-s", input.scope]).pipe(
+        Effect.mapError((failure) => new ClaudeMcpRemoveError(failure)),
+      ),
+  );
+
   const addServer = Effect.fn("ClaudeMcpStatus.addServer")(function* (
     input: AddClaudeMcpServerInput,
   ) {
@@ -544,35 +591,14 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (
     if (nameError !== undefined) {
       return yield* new ClaudeMcpAddError({ reason: "invalidName", detail: nameError });
     }
-    const { settings, environment } = yield* resolveClaude.pipe(
-      Effect.mapError((cause) => new ClaudeMcpAddError({ reason: "settings", cause })),
-    );
-    const output = yield* runCli({
-      binaryPath: settings.binaryPath,
-      args: ["mcp", "add-json", input.name, encodeServerJson(input.server), "-s", input.scope],
-      // Claude keys a local server to the project it runs in.
-      ...(input.scope === "local" ? { cwd: input.cwd } : {}),
-      env: environment,
-    }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ClaudeMcpAddError({
-            reason: cause.reason === "unsupportedLauncher" ? "unsupportedLauncher" : "rejected",
-            cause,
-          }),
-      ),
-    );
-    if (output.code !== 0) {
-      const detail = output.stderr.trim() || output.stdout.trim();
-      return yield* new ClaudeMcpAddError({
-        reason: "rejected",
-        ...(detail.length === 0 ? {} : { detail }),
-      });
-    }
-    // The add has landed; a failed re-probe shows on the list, not here.
-    yield* cachedProbe({ cwd: input.cwd, projectId: input.projectId, fresh: true }).pipe(
-      Effect.catchCause((cause) => Effect.logWarning("claude-mcp-add-reprobe-failed", { cause })),
-    );
+    yield* changeClaudeConfig(input, [
+      "mcp",
+      "add-json",
+      input.name,
+      encodeServerJson(input.server),
+      "-s",
+      input.scope,
+    ]).pipe(Effect.mapError((failure) => new ClaudeMcpAddError(failure)));
   });
 
   return ClaudeMcpStatus.of({

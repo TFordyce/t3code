@@ -1,6 +1,6 @@
 import {
   BUILT_IN_MCP_SERVER_NAME,
-  ClaudeMcpRemovableScope,
+  ClaudeMcpScope,
   type ClaudeMcpServerDetail,
   type ClaudeMcpServerDetailResult,
   type ClaudeMcpServerReport,
@@ -249,7 +249,7 @@ const actionsFor = (
 ): ReadonlyArray<ClaudeMcpDetailAction> =>
   status === "disabled" ? ["enable"] : ["reconnect", "disable"];
 
-const isRemovableScope = Schema.is(ClaudeMcpRemovableScope);
+const isClaudeMcpScope = Schema.is(ClaudeMcpScope);
 
 /**
  * Where a server's sign-in lives. Claude owns it, so T3 only points there:
@@ -302,7 +302,7 @@ export type ClaudeMcpDetailView =
        * Set for user and local servers: the scope `claude mcp remove` takes. The
        * caller offers Remove only with it, and the providers-manage grant.
        */
-      readonly removeScope?: ClaudeMcpRemovableScope;
+      readonly removeScope?: ClaudeMcpScope;
     };
 
 /**
@@ -347,7 +347,7 @@ export function claudeMcpDetailView(input: {
     tools: server.tools.map(toToolView),
     ...(server.tools.length > 0 ? {} : { noToolsText: noToolsText(server.status) }),
     actions: actionsFor(server.status),
-    ...(isRemovableScope(server.scope) ? { removeScope: server.scope } : {}),
+    ...(isClaudeMcpScope(server.scope) ? { removeScope: server.scope } : {}),
   };
 }
 

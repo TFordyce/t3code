@@ -156,42 +156,34 @@ export class ClaudeMcpReconnectError extends Schema.TaggedError<ClaudeMcpReconne
   }
 }
 
-/** The Claude config scopes T3 removes servers from; claude.ai, plugin, managed and project servers stay Claude's to manage. */
-export const ClaudeMcpRemovableScope = Schema.Literals(["user", "local"]);
-export type ClaudeMcpRemovableScope = typeof ClaudeMcpRemovableScope.Type;
+/**
+ * The Claude config scopes T3 adds servers to and removes them from: `user`
+ * for every project, `local` private to one project. claude.ai, plugin,
+ * managed and project servers stay Claude's to manage.
+ */
+export const ClaudeMcpScope = Schema.Literals(["user", "local"]);
+export type ClaudeMcpScope = typeof ClaudeMcpScope.Type;
 
 /**
- * Removes one server from Claude's own config with `claude mcp remove`, at the
- * scope the probe reported. `cwd` is the directory it was probed in, which
- * picks the project a local server belongs to.
+ * Which Claude config a change goes to. `cwd` and `projectId` name the list
+ * re-probed after it, as in {@link ClaudeMcpStatusInput}. A local change needs
+ * the project: the server runs Claude in that project's workspace root, not in
+ * a directory the client names.
  */
-export const RemoveClaudeMcpServerInput = Schema.Struct({
-  name: TrimmedNonEmptyString,
-  scope: ClaudeMcpRemovableScope,
+const userChange = {
+  scope: Schema.Literal("user"),
   cwd: ClaudeMcpStatusInput.fields.cwd,
-});
-export type RemoveClaudeMcpServerInput = typeof RemoveClaudeMcpServerInput.Type;
+  projectId: ClaudeMcpStatusInput.fields.projectId,
+  name: TrimmedNonEmptyString,
+};
+const localChange = { ...userChange, scope: Schema.Literal("local"), projectId: ProjectId };
 
-export class ClaudeMcpRemoveError extends Schema.TaggedError<ClaudeMcpRemoveError>()(
-  "ClaudeMcpRemoveError",
-  {
-    /** `failed`: Claude ran and refused, with its own words in `detail`. */
-    reason: Schema.Literals(["settings", "startFailed", "failed"]),
-    detail: Schema.optional(Schema.String),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    switch (this.reason) {
-      case "settings":
-        return "Could not read the Claude provider settings.";
-      case "startFailed":
-        return "Could not run Claude to remove the MCP server.";
-      case "failed":
-        return this.detail ?? "Claude could not remove the MCP server.";
-    }
-  }
-}
+/** Removes one server from Claude's own config with `claude mcp remove`, at the scope the probe reported. */
+export const RemoveClaudeMcpServerInput = Schema.Union([
+  Schema.Struct(userChange),
+  Schema.Struct(localChange),
+]);
+export type RemoveClaudeMcpServerInput = typeof RemoveClaudeMcpServerInput.Type;
 
 /**
  * Names Claude's CLI takes for a server, and that can't be misread as a flag:
@@ -221,13 +213,6 @@ export function claudeMcpServerNameError(
   return undefined;
 }
 
-/**
- * Where in Claude's own config an added server is saved: `user` for every
- * project, `local` private to the project at `cwd`.
- */
-export const ClaudeMcpAddScope = Schema.Literals(["user", "local"]);
-export type ClaudeMcpAddScope = typeof ClaudeMcpAddScope.Type;
-
 /** A stdio server, in the JSON shape `claude mcp add-json` takes. */
 export const ClaudeMcpStdioServerConfig = Schema.Struct({
   type: Schema.Literal("stdio"),
@@ -252,44 +237,72 @@ export const ClaudeMcpAddServerConfig = Schema.Union([
 ]);
 export type ClaudeMcpAddServerConfig = typeof ClaudeMcpAddServerConfig.Type;
 
-/**
- * Adds a server to Claude's own config through Claude's CLI. `cwd` and
- * `projectId` name the list to re-probe afterwards, as in
- * {@link ClaudeMcpStatusInput}; a local add also runs Claude in `cwd`.
- */
-export const AddClaudeMcpServerInput = Schema.Struct({
-  cwd: ClaudeMcpStatusInput.fields.cwd,
-  projectId: ClaudeMcpStatusInput.fields.projectId,
-  name: TrimmedNonEmptyString,
-  scope: ClaudeMcpAddScope,
-  server: ClaudeMcpAddServerConfig,
-});
+/** Adds a server to Claude's own config with `claude mcp add-json`. */
+export const AddClaudeMcpServerInput = Schema.Union([
+  Schema.Struct({ ...userChange, server: ClaudeMcpAddServerConfig }),
+  Schema.Struct({ ...localChange, server: ClaudeMcpAddServerConfig }),
+]);
 export type AddClaudeMcpServerInput = typeof AddClaudeMcpServerInput.Type;
 
-export class ClaudeMcpAddError extends Schema.TaggedError<ClaudeMcpAddError>()(
-  "ClaudeMcpAddError",
+/**
+ * Why running Claude's CLI for an add or a remove failed. `project`: a local
+ * change named a project this environment doesn't have. `unsupportedLauncher`:
+ * Claude resolves to a Windows script that would need a shell. `startFailed`:
+ * Claude could not be run. `rejected`: Claude ran and refused; `detail` is its
+ * own error.
+ */
+const CLAUDE_MCP_CHANGE_FAILURES = [
+  "settings",
+  "project",
+  "unsupportedLauncher",
+  "startFailed",
+  "rejected",
+] as const;
+
+function claudeMcpChangeMessage(
+  reason: (typeof CLAUDE_MCP_CHANGE_FAILURES)[number],
+  verb: "add" | "remove",
+): string {
+  switch (reason) {
+    case "settings":
+      return "Could not read the Claude provider settings.";
+    case "project":
+      return "Could not find that project on this environment.";
+    case "unsupportedLauncher":
+      return "Claude's launcher script can't be run directly. Set the Claude binary path to claude.exe.";
+    case "startFailed":
+      return `Could not run Claude to ${verb} the MCP server.`;
+    case "rejected":
+      return `Claude could not ${verb} the MCP server.`;
+  }
+}
+
+export class ClaudeMcpRemoveError extends Schema.TaggedError<ClaudeMcpRemoveError>()(
+  "ClaudeMcpRemoveError",
   {
-    /**
-     * `invalidName`: refused by {@link claudeMcpServerNameError}.
-     * `unsupportedLauncher`: Claude resolves to a Windows script that would
-     * need a shell to run. `rejected`: Claude refused; `detail` is its error.
-     */
-    reason: Schema.Literals(["invalidName", "settings", "unsupportedLauncher", "rejected"]),
+    reason: Schema.Literals(CLAUDE_MCP_CHANGE_FAILURES),
     detail: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    if (this.detail !== undefined && this.detail.length > 0) return this.detail;
-    switch (this.reason) {
-      case "invalidName":
-        return "That name can't be used for a Claude server.";
-      case "settings":
-        return "Could not read the Claude provider settings.";
-      case "unsupportedLauncher":
-        return "Claude's launcher script can't be run directly. Set the Claude binary path to claude.exe.";
-      case "rejected":
-        return "Claude could not add the MCP server.";
-    }
+    return this.detail || claudeMcpChangeMessage(this.reason, "remove");
+  }
+}
+
+export class ClaudeMcpAddError extends Schema.TaggedError<ClaudeMcpAddError>()(
+  "ClaudeMcpAddError",
+  {
+    /** `invalidName`: refused by {@link claudeMcpServerNameError}, which `detail` carries. */
+    reason: Schema.Literals(["invalidName", ...CLAUDE_MCP_CHANGE_FAILURES]),
+    detail: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    if (this.detail) return this.detail;
+    return this.reason === "invalidName"
+      ? "That name can't be used for a Claude server."
+      : claudeMcpChangeMessage(this.reason, "add");
   }
 }
