@@ -1035,6 +1035,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:reconnect-claude-mcp-server",
       tag: WS_METHODS.serverReconnectClaudeMcpServer,
     }),
+    addClaudeMcpServer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:add-claude-mcp-server",
+      tag: WS_METHODS.serverAddClaudeMcpServer,
+    }),
     startMcpServerSignIn: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:start-mcp-server-sign-in",
       tag: WS_METHODS.serverStartMcpServerSignIn,

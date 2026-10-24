@@ -520,6 +520,10 @@ it.effect("concurrent fresh requests for one directory share a single probe", ()
   }).pipe(Effect.provide(layerFor(fake.query)));
 });
 
+const decodeServerJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ClaudeMcpAddServerConfig),
+);
+
 const stdioServer = {
   type: "stdio",
   command: "npx",
@@ -542,12 +546,7 @@ it.effect("add runs claude mcp add-json at user scope in the probe's Claude envi
     const call = cli.calls[0]!;
     assert.equal(call.binaryPath, "/opt/claude");
     assert.deepStrictEqual(call.args.slice(0, 3), ["mcp", "add-json", "acme"]);
-    assert.deepStrictEqual(
-      yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ClaudeMcpAddServerConfig))(
-        call.args[3],
-      ),
-      stdioServer,
-    );
+    assert.deepStrictEqual(yield* decodeServerJson(call.args[3]), stdioServer);
     assert.deepStrictEqual(call.args.slice(4), ["-s", "user"]);
     assert.isUndefined(call.cwd);
     assert.equal(call.env.CLAUDE_CONFIG_DIR, (yield* Path.Path).resolve("/claude-home"));
