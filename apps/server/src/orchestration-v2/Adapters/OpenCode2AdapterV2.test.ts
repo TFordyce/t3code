@@ -2444,6 +2444,18 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
             permissions: [...t3Rules, { action: "files_*", resource: "*", effect: "ask" }],
           }),
           reply("session.update", null),
+          // Every turn re-adds T3 Code's own server, which keeps an unchanged connection.
+          out("mcp.add", {
+            server,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp",
+              headers: { Authorization: "Bearer thread-credential" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
           out("mcp.remove", { server: "docs", "location[directory]": WORK }),
           reply("mcp.remove", null),
           out("session.prompt", { sessionID: SESSION, text: "<any>" }),

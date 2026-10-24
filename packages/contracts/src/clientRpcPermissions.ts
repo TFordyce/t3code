@@ -17,6 +17,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   [WS_METHODS.serverCheckMcpServers]: AuthProvidersManageScope,
+  [WS_METHODS.serverSetClaudeMcpServerEnabled]: AuthProvidersManageScope,
+  [WS_METHODS.serverReconnectClaudeMcpServer]: AuthProvidersManageScope,
   [WS_METHODS.serverStartMcpServerSignIn]: AuthProvidersManageScope,
   [WS_METHODS.serverCompleteMcpServerSignIn]: AuthProvidersManageScope,
   [WS_METHODS.serverSignOutMcpServer]: AuthProvidersManageScope,

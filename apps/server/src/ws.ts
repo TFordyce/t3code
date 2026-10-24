@@ -1,4 +1,5 @@
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 
@@ -103,7 +104,7 @@ import {
   HttpServerRespondable,
   HttpServerResponse,
 } from "effect/http";
-import { RpcSerialization, RpcServer } from "effect/rpc";
+import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
@@ -258,6 +259,7 @@ import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as McpServerChecks from "./mcp/McpServerChecks.ts";
+import * as ClaudeMcpStatus from "./provider/ClaudeMcpStatus.ts";
 import * as McpSignIn from "./mcp/McpSignIn.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -550,6 +552,24 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+
+// RpcGroup.toLayer derives each handler's requirements by scanning every RPC in
+// the group, so its type cost grows with handlers × RPCs. Near 200 methods that
+// crosses TypeScript's instantiation limit and the layer's requirements degrade to
+// `any`, so the handlers are registered as two disjoint, smaller groups.
+type ServerWsRpc = RpcGroup.Rpcs<typeof ServerWsRpcGroup>;
+const SPLIT_WS_RPC_PREFIXES = ["server", "pullRequests", "provider", "orchestration"] as const;
+type SplitWsRpc = Extract<
+  ServerWsRpc,
+  { readonly _tag: `${(typeof SPLIT_WS_RPC_PREFIXES)[number]}.${string}` }
+>;
+const isSplitWsRpc = (rpc: ServerWsRpc): rpc is SplitWsRpc =>
+  SPLIT_WS_RPC_PREFIXES.some((prefix) => rpc._tag.startsWith(`${prefix}.`));
+const isOtherWsRpc = (rpc: ServerWsRpc): rpc is Exclude<ServerWsRpc, SplitWsRpc> =>
+  !isSplitWsRpc(rpc);
+const serverWsRpcs = Array.from(ServerWsRpcGroup.requests.values());
+const SplitWsRpcGroup = RpcGroup.make(...serverWsRpcs.filter(isSplitWsRpc));
+const OtherWsRpcGroup = RpcGroup.make(...serverWsRpcs.filter(isOtherWsRpc));
 // Replaying each intervening event costs a shell refetch; past this gap a
 // single O(active-threads) snapshot is cheaper and bounded.
 const SHELL_RESUME_MAX_GAP = 1_000;
@@ -1193,7 +1213,7 @@ export const layerWsRpc = (
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
 ) =>
-  ServerWsRpcGroup.toLayer(
+  Layer.effectContext(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
@@ -1290,6 +1310,7 @@ export const layerWsRpc = (
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const mcpServerChecks = yield* McpServerChecks.McpServerChecks;
       const mcpSignIn = yield* McpSignIn.McpSignIn;
+      const claudeMcpStatus = yield* ClaudeMcpStatus.ClaudeMcpStatus;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -2391,6 +2412,11 @@ export const layerWsRpc = (
         [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
         [WS_METHODS.serverCheckMcpServers]: ({ targets }) =>
           mcpServerChecks.check(targets).pipe(Effect.as({})),
+        [WS_METHODS.serverGetClaudeMcpStatus]: (input) => claudeMcpStatus.probe(input),
+        [WS_METHODS.serverSetClaudeMcpServerEnabled]: (input) =>
+          claudeMcpStatus.setServerEnabled(input).pipe(Effect.as({})),
+        [WS_METHODS.serverReconnectClaudeMcpServer]: (input) =>
+          claudeMcpStatus.reconnectServer(input).pipe(Effect.as({})),
         [WS_METHODS.serverStartMcpServerSignIn]: (target) => mcpSignIn.start(target),
         [WS_METHODS.serverCompleteMcpServerSignIn]: ({ callbackUrl, ...target }) =>
           mcpSignIn.complete(target, callbackUrl).pipe(Effect.as({})),
@@ -3180,7 +3206,13 @@ export const layerWsRpc = (
             ),
           ),
       });
-      return handlers;
+      const splitHandlers: Pick<typeof handlers, SplitWsRpc["_tag"]> = handlers;
+      const otherHandlers: Pick<typeof handlers, Exclude<ServerWsRpc, SplitWsRpc>["_tag"]> =
+        handlers;
+      return Context.merge(
+        yield* SplitWsRpcGroup.toHandlers(splitHandlers),
+        yield* OtherWsRpcGroup.toHandlers(otherHandlers),
+      );
     }),
   );
 

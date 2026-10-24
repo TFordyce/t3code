@@ -1018,6 +1018,14 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverCheckMcpServers,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    setClaudeMcpServerEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:set-claude-mcp-server-enabled",
+      tag: WS_METHODS.serverSetClaudeMcpServerEnabled,
+    }),
+    reconnectClaudeMcpServer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:reconnect-claude-mcp-server",
+      tag: WS_METHODS.serverReconnectClaudeMcpServer,
+    }),
     startMcpServerSignIn: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:start-mcp-server-sign-in",
       tag: WS_METHODS.serverStartMcpServerSignIn,
@@ -1172,6 +1180,13 @@ export function createServerEnvironmentAtoms<R, E>(
               : Effect.succeed(summary),
           ),
         ),
+    }),
+    // Probing starts Claude and its MCP servers, so automatic reads are
+    // throttled per environment and directory; a manual refresh bypasses that.
+    claudeMcpStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:claude-mcp-status",
+      tag: WS_METHODS.serverGetClaudeMcpStatus,
+      staleTimeMs: 5 * 60_000,
     }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",

@@ -488,6 +488,20 @@ export const layerWithOptions = (
           ),
         );
       });
+      /** The MCP server names the user turned off for Claude in this thread's project. */
+      const resolveClaudeDisabledMcp = Effect.fn(
+        "ProviderSessionManagerV2.resolveClaudeDisabledMcp",
+      )(function* (threadId: ThreadId): Effect.fn.Return<ReadonlyArray<string>> {
+        if (Option.isNone(serverSettings)) return [];
+        return yield* Effect.gen(function* () {
+          const settings = yield* serverSettings.value.getSettings;
+          const projectId = yield* projectionStore.getThread(threadId).pipe(
+            Effect.map((thread) => thread.projectId),
+            Effect.orElseSucceed(() => null),
+          );
+          return resolveProjectSettings(settings, projectId).settings.claudeDisabledMcpServers;
+        }).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+      });
       /**
        * Serialized per thread so two concurrent prepares cannot interleave
        * their rotate steps and revoke each other's freshly minted credential.
@@ -544,6 +558,7 @@ export const layerWithOptions = (
                     yield* mcpSessions.set({
                       ...existing,
                       userMcp: yield* resolveUserMcp(threadId, existing.endpoint),
+                      claudeDisabledMcpServers: yield* resolveClaudeDisabledMcp(threadId),
                     });
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
@@ -559,6 +574,7 @@ export const layerWithOptions = (
                 yield* mcpSessions.set({
                   ...credential.config,
                   userMcp: yield* resolveUserMcp(threadId, credential.config.endpoint),
+                  claudeDisabledMcpServers: yield* resolveClaudeDisabledMcp(threadId),
                 });
                 reserveMcpCredential(threadId, credential.config.providerSessionId);
                 return { mcpCredentialId: credential.config.providerSessionId, issued: true };

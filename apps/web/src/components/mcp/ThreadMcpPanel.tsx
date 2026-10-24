@@ -10,12 +10,18 @@ import {
   mcpServerListRows,
   mcpThreadFallback,
 } from "@t3tools/client-runtime/state/mcp-server-checks";
-import type { EnvironmentId, McpSessionServerStatus, ProjectId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  McpSessionServerStatus,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { useMemo } from "react";
 
-import { serverEnvironment } from "../../state/server";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
+import { ClaudeMcpGroups, useClaudeMcpStatus } from "../settings/ClaudeMcpServers";
 import { Badge } from "../ui/badge";
+import { ClaudeMcpReconnectButton } from "../settings/ClaudeMcpReconnectButton";
 import { Button } from "../ui/button";
 import { MCP_STATUS_LABELS, threadMcpRows } from "./ThreadMcpPanel.logic";
 
@@ -34,17 +40,29 @@ export function ThreadMcpPanel(props: {
   /** The provider session's report, or `null` when it reported nothing. */
   readonly sessionServers: ReadonlyArray<McpSessionServerStatus> | null;
   /** The thread's project, whose own servers join the environment's. */
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
+  /** The project's working directory, where Claude is asked which servers it loads. */
+  readonly cwd: string | null;
+  /** The thread whose running session a failed server reconnects in. */
+  readonly threadId: ThreadId;
 }) {
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
-  const rows = useMemo(() => {
-    const fallback =
-      settings === null || settings === undefined
-        ? { configuredNames: [] }
-        : mcpThreadFallback(mcpServerListRows({ settings, config, projectId: props.projectId }));
-    return threadMcpRows({ sessionServers: props.sessionServers, ...fallback });
-  }, [config, props.projectId, props.sessionServers, settings]);
+  const fallback =
+    settings === null || settings === undefined
+      ? { configuredNames: [] }
+      : mcpThreadFallback(mcpServerListRows({ settings, config, projectId: props.projectId }));
+  const rows = threadMcpRows({ sessionServers: props.sessionServers, ...fallback });
+  const providers =
+    useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
+  const claude = useClaudeMcpStatus({
+    environmentId: props.environmentId,
+    cwd: props.cwd,
+    projectId: props.projectId ?? undefined,
+    providers,
+    t3Names: rows.map((row) => row.name),
+  });
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3">
@@ -79,13 +97,35 @@ export function ThreadMcpPanel(props: {
                   </div>
                 ) : null}
               </div>
-              <Badge variant={STATUS_BADGE_VARIANT[row.status]}>
-                {MCP_STATUS_LABELS[row.status]}
-              </Badge>
+              <div className="flex shrink-0 items-center gap-2">
+                {row.status === "failed" ? (
+                  <ClaudeMcpReconnectButton
+                    environmentId={props.environmentId}
+                    threadId={props.threadId}
+                    name={row.name}
+                    onReconnected={claude.refresh}
+                  />
+                ) : null}
+                <Badge variant={STATUS_BADGE_VARIANT[row.status]}>
+                  {MCP_STATUS_LABELS[row.status]}
+                </Badge>
+              </div>
             </li>
           ))}
         </ul>
       )}
+      {claude.view !== null && claude.view.projectGroups.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <h3 className="text-xs font-medium text-muted-foreground">Claude project servers</h3>
+          <ClaudeMcpGroups
+            environmentId={props.environmentId}
+            projectId={props.projectId ?? undefined}
+            threadId={props.threadId}
+            groups={claude.view.projectGroups}
+            onReconnected={claude.refresh}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

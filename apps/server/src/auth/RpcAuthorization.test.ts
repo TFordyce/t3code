@@ -406,6 +406,11 @@ it.effect.each([
     payload: { scope: "global", name: "docs", callbackUrl: "http://127.0.0.1:1/callback?code=a" },
   },
   { method: WS_METHODS.serverSignOutMcpServer, payload: { scope: "global", name: "docs" } },
+  { method: WS_METHODS.serverSetClaudeMcpServerEnabled, payload: { name: "docs", enabled: false } },
+  {
+    method: WS_METHODS.serverReconnectClaudeMcpServer,
+    payload: { threadId: "thread-1", name: "docs" },
+  },
 ] as const)("denies MCP sign-in RPC $method without providers-manage", ({ method, payload }) =>
   Effect.gen(function* () {
     const group = WsRpcGroup.omit(

@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Pure synchronous hashing keeps page matching bounded without a runtime dependency.
 import * as NodeCrypto from "node:crypto";
-import type { ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@t3tools/contracts";
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -27,12 +27,34 @@ interface KeptHtmlRender {
 
 const hashHtml = (html: string) => NodeCrypto.createHash("sha256").update(html).digest("hex");
 
+/**
+ * What a live Claude process offers the server for turning one MCP server on
+ * or off without a restart. Registered while the process runs.
+ */
+export interface LiveMcpToggle {
+  readonly projectId: ProjectId;
+  readonly toggle: (name: string, enabled: boolean) => Effect.Effect<void>;
+  /**
+   * Reconnects one server in the live process. Resolves `false` when the
+   * process has since closed, so nothing was reconnected; fails when Claude
+   * itself refuses.
+   */
+  readonly reconnect: (name: string) => Effect.Effect<boolean, { readonly message: string }>;
+}
+
 export class McpProviderSessions extends Context.Service<
   McpProviderSessions,
   {
     readonly set: (config: McpProviderSessionConfig) => Effect.Effect<void>;
     readonly read: (threadId: ThreadId) => Effect.Effect<McpProviderSessionConfig | undefined>;
     readonly clear: (threadId: ThreadId) => Effect.Effect<void>;
+    /** Replaces the thread's live toggle; `undefined` removes it. */
+    readonly setLiveToggle: (
+      threadId: ThreadId,
+      liveToggle: LiveMcpToggle | undefined,
+    ) => Effect.Effect<void>;
+    readonly liveToggles: Effect.Effect<ReadonlyArray<LiveMcpToggle>>;
+    readonly liveToggle: (threadId: ThreadId) => Effect.Effect<LiveMcpToggle | undefined>;
     readonly recordHtmlRender: (
       threadId: ThreadId,
       input: { readonly html: string; readonly title: string; readonly height: number },
@@ -80,6 +102,7 @@ const matchingPageIndex = (
 const make = Effect.gen(function* () {
   const sessions = yield* Ref.make(new Map<ThreadId, McpProviderSessionConfig>());
   const htmlRenders = yield* Ref.make(new Map<ThreadId, ReadonlyArray<KeptHtmlRender>>());
+  const liveToggles = yield* Ref.make(new Map<ThreadId, LiveMcpToggle>());
   return McpProviderSessions.of({
     set: Effect.fn("McpProviderSessions.set")(function* (config) {
       const current = yield* Ref.get(sessions);
@@ -92,6 +115,16 @@ const make = Effect.gen(function* () {
       }
       yield* Ref.update(sessions, (current) => new Map(current).set(config.threadId, config));
     }),
+    setLiveToggle: (threadId, liveToggle) =>
+      Ref.update(liveToggles, (current) => {
+        const next = new Map(current);
+        if (liveToggle === undefined) next.delete(threadId);
+        else next.set(threadId, liveToggle);
+        return next;
+      }),
+    liveToggle: (threadId) =>
+      Ref.get(liveToggles).pipe(Effect.map((current) => current.get(threadId))),
+    liveToggles: Ref.get(liveToggles).pipe(Effect.map((current) => [...current.values()])),
     read: (threadId) => Ref.get(sessions).pipe(Effect.map((current) => current.get(threadId))),
     clear: (threadId) =>
       Ref.update(sessions, (current) => {

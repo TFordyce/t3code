@@ -76,6 +76,9 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as ClaudeMcpStatus from "./provider/ClaudeMcpStatus.ts";
+import * as McpServerChecks from "./mcp/McpServerChecks.ts";
+import * as McpSignIn from "./mcp/McpSignIn.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
@@ -289,6 +292,16 @@ it.live.each(["thread", "shell"] as const)(
 );
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
+const layerMcpConfigRpcServices = Layer.mergeAll(
+  Layer.mock(ClaudeMcpStatus.ClaudeMcpStatus)({}),
+  Layer.mock(McpServerChecks.McpServerChecks)({
+    current: Effect.succeed([]),
+    streamChanges: Stream.empty,
+    ensureChecked: Effect.void,
+  }),
+  Layer.mock(McpSignIn.McpSignIn)({}),
+);
+
 const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(WorkspacePaths.WorkspacePaths)({}),
@@ -324,7 +337,9 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
   Layer.mock(ProjectStore.ProjectStoreV2)({}),
   Layer.mock(ProviderAuthService.ProviderAuthService)({}),
-  Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
+  Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+    listInstances: Effect.succeed([]),
+  }),
   Layer.mock(ProviderLatestVersions.ProviderLatestVersions)({}),
   Layer.mock(ProviderMaintenanceRunner.ProviderMaintenanceRunner)({}),
   Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
@@ -344,6 +359,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
+  layerMcpConfigRpcServices,
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(TerminalManager.TerminalManager)({}),
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),

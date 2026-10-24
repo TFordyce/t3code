@@ -20,6 +20,7 @@ export * from "./providerSetup.ts";
 export * from "./providerRuntime.ts";
 export * from "./providerUsageLimits.ts";
 export * from "./usageLimitSourceId.ts";
+export * from "./claudeMcpStatus.ts";
 export * from "./mcpServers.ts";
 export * from "./mcpSessionStatus.ts";
 export * from "./providerPolicy.ts";

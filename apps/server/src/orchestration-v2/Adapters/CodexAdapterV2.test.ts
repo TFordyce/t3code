@@ -204,94 +204,93 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.isDefined(withT3.additionalContext?.["t3_code_runtime"]);
     }),
   );
-describe("CodexAdapterV2 user MCP servers", () => {
-  const mcpSession = (userMcp?: {
-    readonly servers: ReadonlyArray<
-      | {
-          readonly name: string;
-          readonly transport: "stdio";
-          readonly command: string;
-          readonly args: ReadonlyArray<string>;
-          readonly env: Readonly<Record<string, string>>;
-        }
-      | {
-          readonly name: string;
-          readonly transport: "http";
-          readonly url: string;
-          readonly upstreamUrlFingerprint: string;
-        }
-    >;
-    readonly skipped: [];
-  }) => ({
-    environmentId: EnvironmentId.make("environment-codex-user-mcp"),
-    threadId: ThreadId.make("thread-codex-user-mcp"),
-    providerSessionId: "mcp-session-codex-user",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    endpoint: "http://127.0.0.1:43123/mcp",
-    authorizationHeader: "Bearer secret-codex-token",
-    browserToolsAvailable: false,
-    ...(userMcp === undefined ? {} : { userMcp }),
-  });
-  const t3Entry = {
-    url: "http://127.0.0.1:43123/mcp",
-    tool_timeout_sec: 3_900,
-    http_headers: { Authorization: "Bearer secret-codex-token" },
-  };
-
-  it("adds user stdio MCP servers beside the unchanged t3-code entry", () => {
-    const { config } = CodexAdapterV2.codexThreadRuntimeParams({
-      mcpSession: mcpSession({
-        servers: [
-          {
-            name: "docs",
-            transport: "stdio",
-            command: "docs-mcp",
-            args: ["--serve"],
-            env: { TOKEN: "real-token" },
-          },
-        ],
-        skipped: [],
-      }),
+  describe("CodexAdapterV2 user MCP servers", () => {
+    const mcpSession = (userMcp?: {
+      readonly servers: ReadonlyArray<
+        | {
+            readonly name: string;
+            readonly transport: "stdio";
+            readonly command: string;
+            readonly args: ReadonlyArray<string>;
+            readonly env: Readonly<Record<string, string>>;
+          }
+        | {
+            readonly name: string;
+            readonly transport: "http";
+            readonly url: string;
+            readonly upstreamUrlFingerprint: string;
+          }
+      >;
+      readonly skipped: [];
+    }) => ({
+      environmentId: EnvironmentId.make("environment-codex-user-mcp"),
+      threadId: ThreadId.make("thread-codex-user-mcp"),
+      providerSessionId: "mcp-session-codex-user",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer secret-codex-token",
+      browserToolsAvailable: false,
+      ...(userMcp === undefined ? {} : { userMcp }),
     });
-
-    assert.deepEqual(config["mcp_servers.t3-code"], t3Entry);
-    assert.deepEqual(config["mcp_servers.docs"], {
-      command: "docs-mcp",
-      args: ["--serve"],
-      env: { TOKEN: "real-token" },
-    });
-  });
-
-  it("carries an HTTP user server as the proxy address with the session bearer", () => {
-    const { config } = CodexAdapterV2.codexThreadRuntimeParams({
-      mcpSession: mcpSession({
-        servers: [
-          {
-            name: "docs",
-            transport: "http",
-            url: "http://127.0.0.1:43123/mcp-proxy/docs",
-            upstreamUrlFingerprint: "abc",
-          },
-        ],
-        skipped: [],
-      }),
-    });
-
-    assert.deepEqual(config["mcp_servers.docs"], {
-      url: "http://127.0.0.1:43123/mcp-proxy/docs",
+    const t3Entry = {
+      url: "http://127.0.0.1:43123/mcp",
+      tool_timeout_sec: 3_900,
       http_headers: { Authorization: "Bearer secret-codex-token" },
+    };
+
+    it("adds user stdio MCP servers beside the unchanged t3-code entry", () => {
+      const { config } = CodexAdapterV2.codexThreadRuntimeParams({
+        mcpSession: mcpSession({
+          servers: [
+            {
+              name: "docs",
+              transport: "stdio",
+              command: "docs-mcp",
+              args: ["--serve"],
+              env: { TOKEN: "real-token" },
+            },
+          ],
+          skipped: [],
+        }),
+      });
+
+      assert.deepEqual(config["mcp_servers.t3-code"], t3Entry);
+      assert.deepEqual(config["mcp_servers.docs"], {
+        command: "docs-mcp",
+        args: ["--serve"],
+        env: { TOKEN: "real-token" },
+      });
+    });
+
+    it("carries an HTTP user server as the proxy address with the session bearer", () => {
+      const { config } = CodexAdapterV2.codexThreadRuntimeParams({
+        mcpSession: mcpSession({
+          servers: [
+            {
+              name: "docs",
+              transport: "http",
+              url: "http://127.0.0.1:43123/mcp-proxy/docs",
+              upstreamUrlFingerprint: "abc",
+            },
+          ],
+          skipped: [],
+        }),
+      });
+
+      assert.deepEqual(config["mcp_servers.docs"], {
+        url: "http://127.0.0.1:43123/mcp-proxy/docs",
+        http_headers: { Authorization: "Bearer secret-codex-token" },
+      });
+    });
+
+    it("passes no user servers when the slot has none", () => {
+      const { config } = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession: mcpSession() });
+      assert.deepEqual(
+        Object.keys(config).filter((key) => key.startsWith("mcp_servers.")),
+        ["mcp_servers.t3-code"],
+      );
     });
   });
-
-  it("passes no user servers when the slot has none", () => {
-    const { config } = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession: mcpSession() });
-    assert.deepEqual(
-      Object.keys(config).filter((key) => key.startsWith("mcp_servers.")),
-      ["mcp_servers.t3-code"],
-    );
-  });
-});
-
 });
 
 describe("CodexAdapterV2 native protocol logging", () => {

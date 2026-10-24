@@ -134,6 +134,11 @@ export interface McpProviderSessionConfig {
    * the session is not configured for MCP.
    */
   readonly userMcp?: UserMcpSessionServers;
+  /**
+   * Names of MCP servers the user turned off for Claude in T3, resolved for
+   * the thread's project on every prepare. Only the Claude adapter reads it.
+   */
+  readonly claudeDisabledMcpServers?: ReadonlyArray<string>;
 }
 
 export function withAgentDeviceEnvironment(

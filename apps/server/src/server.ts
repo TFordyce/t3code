@@ -67,6 +67,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpProxy from "./mcp/McpProxy.ts";
 import * as McpServerChecks from "./mcp/McpServerChecks.ts";
+import * as ClaudeMcpStatus from "./provider/ClaudeMcpStatus.ts";
 import * as McpSignIn from "./mcp/McpSignIn.ts";
 import * as McpUpstream from "./mcp/McpUpstream.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
@@ -631,6 +632,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
 
 const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(layerPtyAdapter),
+  // Reaches live Claude sessions through McpProviderSessions, provided just below.
+  Layer.provideMerge(ClaudeMcpStatus.layer),
   Layer.provideMerge(AcpRegistrySupport.layerFromHost.pipe(Layer.provide(ProviderHostLive.layer))),
   Layer.provideMerge(
     Layer.mergeAll(

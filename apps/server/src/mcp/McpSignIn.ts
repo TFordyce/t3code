@@ -315,42 +315,44 @@ const make = Effect.gen(function* () {
   );
 
   /** Refreshes with the SDK, which rediscovers the authorization server from the stored issuer. */
-  const refresh = (target: McpSignInTarget, bundle: SignInBundle) =>
-    Effect.gen(function* () {
-      const session = newSession("http://127.0.0.1/");
-      session.clientInformation = bundle.clientInformation;
-      session.tokens = bundle.tokens;
-      const outcome = yield* Effect.tryPromise({
-        try: () => auth(providerFor(session), { serverUrl: target.url }),
-        catch: toError,
-      }).pipe(Effect.result);
-      const refreshed = session.tokens;
-      if (
-        outcome._tag === "Failure" ||
-        outcome.success !== "AUTHORIZED" ||
-        refreshed === undefined ||
-        refreshed.access_token === bundle.tokens.access_token
-      ) {
-        yield* markExpired(target);
-        return undefined;
-      }
-      const expiresAt = expiresAtOf(refreshed);
-      const next: SignInBundle = {
-        resourceUrl: bundle.resourceUrl,
-        issuer: bundle.issuer,
-        clientInformation: bundle.clientInformation,
-        tokens: refreshed,
-        ...(expiresAt === undefined ? {} : { expiresAt }),
-      };
-      const saved = yield* writeBundle(target, next).pipe(Effect.result);
-      if (saved._tag === "Failure") {
-        yield* Effect.logWarning("Could not save a refreshed MCP sign-in.", {
-          cause: saved.failure,
-        });
-      }
-      if (expired.delete(keyOf(target))) yield* publish(target);
-      return refreshed.access_token;
-    });
+  const refresh = Effect.fn("McpSignIn.refresh")(function* (
+    target: McpSignInTarget,
+    bundle: SignInBundle,
+  ) {
+    const session = newSession("http://127.0.0.1/");
+    session.clientInformation = bundle.clientInformation;
+    session.tokens = bundle.tokens;
+    const outcome = yield* Effect.tryPromise({
+      try: () => auth(providerFor(session), { serverUrl: target.url }),
+      catch: toError,
+    }).pipe(Effect.result);
+    const refreshed = session.tokens;
+    if (
+      outcome._tag === "Failure" ||
+      outcome.success !== "AUTHORIZED" ||
+      refreshed === undefined ||
+      refreshed.access_token === bundle.tokens.access_token
+    ) {
+      yield* markExpired(target);
+      return undefined;
+    }
+    const expiresAt = expiresAtOf(refreshed);
+    const next: SignInBundle = {
+      resourceUrl: bundle.resourceUrl,
+      issuer: bundle.issuer,
+      clientInformation: bundle.clientInformation,
+      tokens: refreshed,
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+    };
+    const saved = yield* writeBundle(target, next).pipe(Effect.result);
+    if (saved._tag === "Failure") {
+      yield* Effect.logWarning("Could not save a refreshed MCP sign-in.", {
+        cause: saved.failure,
+      });
+    }
+    if (expired.delete(keyOf(target))) yield* publish(target);
+    return refreshed.access_token;
+  });
 
   const usableBundle = (target: McpSignInTarget) =>
     readBundle(target).pipe(
@@ -390,102 +392,97 @@ const make = Effect.gen(function* () {
     return yield* refreshAfterUnauthorizedOrExpiry(target, rejected);
   });
 
-  const completeFlow = (target: McpServerCheckTarget, callbackUrl: string) =>
-    Effect.gen(function* () {
-      const flow = pending.get(keyOf(target));
-      if (flow === undefined || flow.used) {
-        return yield* signInError("There is no sign-in in progress for this server.");
-      }
-      // An edit or removal since the flow started owns the entry now.
-      const current = yield* currentSettings;
-      if (
-        current === undefined ||
-        JSON.stringify(httpEntryOf(current, target)) !== flow.entryJson
-      ) {
-        yield* abortPending(target);
-        return yield* signInError("The server was changed during sign-in. Start again.");
-      }
-      let callback: URL;
-      try {
-        callback = new URL(callbackUrl.trim());
-      } catch {
-        return yield* signInError(
-          "That is not a valid URL. Paste the full address from the browser.",
-        );
-      }
-      const params = callback.searchParams;
-      const failure = params.get("error");
-      if (failure !== null) {
-        yield* abortPending(target);
-        return yield* signInError(
-          `The authorization server refused the sign-in: ${params.get("error_description") ?? failure}.`,
-        );
-      }
-      if (params.get("state") !== flow.session.state) {
-        return yield* signInError(
-          "The sign-in response does not belong to this sign-in (state mismatch).",
-        );
-      }
-      const issuer = issuerOf(flow.session.discovery);
-      const issuerSent = params.get("iss");
-      const issuerRequired =
-        (
-          flow.session.discovery?.authorizationServerMetadata as
-            | { readonly authorization_response_iss_parameter_supported?: boolean }
-            | undefined
-        )?.authorization_response_iss_parameter_supported === true;
-      if (
-        (issuerSent !== null && issuerSent !== issuer) ||
-        (issuerSent === null && issuerRequired)
-      ) {
-        return yield* signInError(
-          "The sign-in response came from a different issuer (iss mismatch).",
-        );
-      }
-      const code = params.get("code");
-      if (code === null || code === "") {
-        return yield* signInError("The sign-in response has no authorization code.");
-      }
-      flow.used = true;
-      const exchanged = yield* Effect.tryPromise({
-        try: () =>
-          auth(providerFor(flow.session), { serverUrl: flow.url, authorizationCode: code }),
-        catch: toError,
-      }).pipe(Effect.result);
-      const tokens = flow.session.tokens;
-      const information = flow.session.clientInformation;
-      if (
-        exchanged._tag === "Failure" ||
-        exchanged.success !== "AUTHORIZED" ||
-        tokens === undefined ||
-        information === undefined ||
-        issuer === undefined
-      ) {
-        flow.used = false;
-        return yield* signInError(
-          exchanged._tag === "Failure"
-            ? `Could not finish the sign-in: ${errorText(exchanged.failure)}`
-            : "Could not finish the sign-in.",
-        );
-      }
-      // The entry may have been edited or removed while the browser was open.
-      if (pending.get(keyOf(target)) !== flow) {
-        return yield* signInError("The server was changed during sign-in. Start again.");
-      }
-      const expiresAt = expiresAtOf(tokens);
-      yield* writeBundle(target, {
-        resourceUrl: flow.url,
-        issuer,
-        clientInformation: information,
-        tokens,
-        ...(expiresAt === undefined ? {} : { expiresAt }),
-      }).pipe(
-        Effect.mapError((cause) => signInError(`Could not save the sign-in: ${errorText(cause)}`)),
-      );
-      expired.delete(keyOf(target));
+  const completeFlow = Effect.fn("McpSignIn.completeFlow")(function* (
+    target: McpServerCheckTarget,
+    callbackUrl: string,
+  ) {
+    const flow = pending.get(keyOf(target));
+    if (flow === undefined || flow.used) {
+      return yield* signInError("There is no sign-in in progress for this server.");
+    }
+    // An edit or removal since the flow started owns the entry now.
+    const current = yield* currentSettings;
+    if (current === undefined || JSON.stringify(httpEntryOf(current, target)) !== flow.entryJson) {
       yield* abortPending(target);
-      yield* publish(target);
-    });
+      return yield* signInError("The server was changed during sign-in. Start again.");
+    }
+    let callback: URL;
+    try {
+      callback = new URL(callbackUrl.trim());
+    } catch {
+      return yield* signInError(
+        "That is not a valid URL. Paste the full address from the browser.",
+      );
+    }
+    const params = callback.searchParams;
+    const failure = params.get("error");
+    if (failure !== null) {
+      yield* abortPending(target);
+      return yield* signInError(
+        `The authorization server refused the sign-in: ${params.get("error_description") ?? failure}.`,
+      );
+    }
+    if (params.get("state") !== flow.session.state) {
+      return yield* signInError(
+        "The sign-in response does not belong to this sign-in (state mismatch).",
+      );
+    }
+    const issuer = issuerOf(flow.session.discovery);
+    const issuerSent = params.get("iss");
+    const issuerRequired =
+      (
+        flow.session.discovery?.authorizationServerMetadata as
+          | { readonly authorization_response_iss_parameter_supported?: boolean }
+          | undefined
+      )?.authorization_response_iss_parameter_supported === true;
+    if ((issuerSent !== null && issuerSent !== issuer) || (issuerSent === null && issuerRequired)) {
+      return yield* signInError(
+        "The sign-in response came from a different issuer (iss mismatch).",
+      );
+    }
+    const code = params.get("code");
+    if (code === null || code === "") {
+      return yield* signInError("The sign-in response has no authorization code.");
+    }
+    flow.used = true;
+    const exchanged = yield* Effect.tryPromise({
+      try: () => auth(providerFor(flow.session), { serverUrl: flow.url, authorizationCode: code }),
+      catch: toError,
+    }).pipe(Effect.result);
+    const tokens = flow.session.tokens;
+    const information = flow.session.clientInformation;
+    if (
+      exchanged._tag === "Failure" ||
+      exchanged.success !== "AUTHORIZED" ||
+      tokens === undefined ||
+      information === undefined ||
+      issuer === undefined
+    ) {
+      flow.used = false;
+      return yield* signInError(
+        exchanged._tag === "Failure"
+          ? `Could not finish the sign-in: ${errorText(exchanged.failure)}`
+          : "Could not finish the sign-in.",
+      );
+    }
+    // The entry may have been edited or removed while the browser was open.
+    if (pending.get(keyOf(target)) !== flow) {
+      return yield* signInError("The server was changed during sign-in. Start again.");
+    }
+    const expiresAt = expiresAtOf(tokens);
+    yield* writeBundle(target, {
+      resourceUrl: flow.url,
+      issuer,
+      clientInformation: information,
+      tokens,
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+    }).pipe(
+      Effect.mapError((cause) => signInError(`Could not save the sign-in: ${errorText(cause)}`)),
+    );
+    expired.delete(keyOf(target));
+    yield* abortPending(target);
+    yield* publish(target);
+  });
 
   /** Listens on a free loopback port for the browser's redirect and finishes the flow. */
   const listenForRedirect = (target: McpServerCheckTarget) =>

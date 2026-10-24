@@ -3,8 +3,8 @@ import { useMemo } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AppText as Text } from "../../components/AppText";
-import { ScreenScrollView } from "../../components/ScreenScrollView";
+import { AppText as Text } from "../../components/ui/AppText";
+import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { McpStatusDot, MCP_TONE_TEXT_CLASS } from "../mcp/McpStatus";
 import {
   AndroidSettingsEnvironmentFilter,

@@ -480,6 +480,8 @@ export type ClaudeAgentSdkQueryOptions = Omit<
 
 export interface ClaudeAgentSdkQueryOpenInput {
   readonly options: ClaudeAgentSdkQueryOptions;
+  /** MCP servers the user turned off in T3; the runner switches them off once the process is up. */
+  readonly disabledMcpServers?: ReadonlyArray<string>;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
 }
@@ -506,6 +508,15 @@ export interface ClaudeAgentSdkQuerySession {
     ReadonlyArray<ClaudeMcpServerStatus>,
     ClaudeAgentSdkQueryRunnerError
   >;
+  // Switches one MCP server on or off in the running process; optional so query fakes can leave it out.
+  readonly toggleMcpServer?: (
+    name: string,
+    enabled: boolean,
+  ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  // Reconnects one MCP server in the running process; optional so query fakes can leave it out.
+  readonly reconnectMcpServer?: (
+    name: string,
+  ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   // The /context categories; optional so query fakes can leave it out.
   readonly getContextUsage?: Effect.Effect<
     { readonly categories: ReadonlyArray<ClaudeContextUsageCategory> },
@@ -1042,6 +1053,16 @@ export const layerQueryRunner: Layer.Layer<
                       });
                     }
                   }
+                  // Names Claude does not know fail alone; the rest still apply.
+                  yield* Effect.forEach(
+                    input.disabledMcpServers ?? [],
+                    (name) =>
+                      Effect.tryPromise(() => queryRuntime.toggleMcpServer(name, false)).pipe(
+                        Effect.timeoutOption(CLAUDE_MCP_REGISTRATION_TIMEOUT),
+                        Effect.ignore,
+                      ),
+                    { discard: true },
+                  );
                   yield* logProtocolEvent({
                     direction: "outgoing",
                     stage: "decoded",
@@ -1141,6 +1162,16 @@ export const layerQueryRunner: Layer.Layer<
             try: () => queryRuntime.mcpServerStatus(),
             catch: (cause) => queryRunnerError(cause, "mcpServerStatus"),
           }),
+          toggleMcpServer: (name, enabled) =>
+            Effect.tryPromise({
+              try: () => queryRuntime.toggleMcpServer(name, enabled),
+              catch: (cause) => queryRunnerError(cause, "toggleMcpServer"),
+            }),
+          reconnectMcpServer: (name) =>
+            Effect.tryPromise({
+              try: () => queryRuntime.reconnectMcpServer(name),
+              catch: (cause) => queryRunnerError(cause, "reconnectMcpServer"),
+            }),
           // Summary detail answers from local estimates, with no token-count API calls.
           getContextUsage: Effect.tryPromise({
             try: () => queryRuntime.getContextUsage({ detail: "summary" }),
@@ -9418,6 +9449,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               threadId: turnInput.threadId,
               providerSessionId: input.providerSessionId,
               options: queryOptions,
+              ...(mcpSession?.claudeDisabledMcpServers === undefined
+                ? {}
+                : { disabledMcpServers: mcpSession.claudeDisabledMcpServers }),
             })
             .pipe(
               Effect.onError(() =>
@@ -9466,6 +9500,39 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ),
           };
           yield* Ref.set(queryContext, context);
+          // Lets a toggle in Settings reach this process without a restart. A
+          // closed process is skipped, so a stale registration is harmless.
+          const toggleMcpServer = querySession.toggleMcpServer;
+          const reconnectMcpServer = querySession.reconnectMcpServer;
+          if (toggleMcpServer !== undefined) {
+            yield* mcpSessions.setLiveToggle(turnInput.threadId, {
+              projectId: turnInput.appThread.projectId,
+              toggle: (name, enabled) =>
+                Ref.get(queryContext).pipe(
+                  Effect.flatMap((live) =>
+                    live?.query === querySession && !live.stopping
+                      ? toggleMcpServer(name, enabled)
+                      : Effect.void,
+                  ),
+                  Effect.catch((error) =>
+                    Effect.logWarning("orchestration-v2.claude-mcp-toggle-failed", {
+                      name,
+                      error,
+                    }),
+                  ),
+                ),
+              reconnect: (name) =>
+                Ref.get(queryContext).pipe(
+                  Effect.flatMap((live) =>
+                    reconnectMcpServer !== undefined &&
+                    live?.query === querySession &&
+                    !live.stopping
+                      ? reconnectMcpServer(name).pipe(Effect.as(true))
+                      : Effect.succeed(false),
+                  ),
+                ),
+            });
+          }
           yield* querySession.messages.pipe(
             Stream.runForEach((message) =>
               sdkMessageLock.withPermits(1)(

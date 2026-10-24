@@ -91,10 +91,7 @@ type McpHttpServer = Extract<McpServerConfig, { transport: "http" }>;
  * changes, its transport leaves http, or its OAuth client id changes.
  * Toggling `enabled`, project markers and other header edits keep it.
  */
-export function planMcpSignInClears(
-  current: ServerSettings,
-  next: ServerSettings,
-): ReadonlyArray<string> {
+function planMcpSignInClears(current: ServerSettings, next: ServerSettings): ReadonlyArray<string> {
   const httpEntries = (settings: ServerSettings) => {
     const entries = new Map<string, McpHttpServer>();
     mapMcpEntries(settings, (scope, name, server) => {
