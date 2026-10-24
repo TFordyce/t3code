@@ -1,7 +1,7 @@
 /**
  * The user and org MCP servers Claude has loaded, on Settings → MCP. Claude
  * reports them through a probe that starts its servers, so the page reads it on
- * mount and the query throttles automatic re-reads; Refresh always asks again.
+ * mount and the query throttles automatic re-reads; Refresh asks Claude again.
  *
  * @module ClaudeMcpServers
  */
@@ -16,6 +16,7 @@ import { useState } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
@@ -37,6 +38,8 @@ const hasClaudeProvider = (providers: ReadonlyArray<ServerProvider>) =>
 /**
  * Claude's report for an environment, read on mount. `cwd` is the directory
  * Claude is started in; null (or no Claude provider) skips the probe.
+ * `refresh` asks Claude again past the server's probe cache, then re-reads
+ * the list, which that fresh probe has just cached.
  */
 export function useClaudeMcpStatus(input: {
   readonly environmentId: EnvironmentId;
@@ -48,17 +51,28 @@ export function useClaudeMcpStatus(input: {
 }) {
   const { environmentId, cwd, projectId, providers, t3Names } = input;
   const probes = cwd !== null && hasClaudeProvider(providers);
+  const probeInput = probes ? { cwd, ...(projectId === undefined ? {} : { projectId }) } : null;
   const query = useEnvironmentQuery(
-    probes
-      ? serverEnvironment.claudeMcpStatus({
-          environmentId,
-          input: { cwd, ...(projectId === undefined ? {} : { projectId }) },
-        })
-      : null,
+    probeInput === null
+      ? null
+      : serverEnvironment.claudeMcpStatus({ environmentId, input: probeInput }),
   );
+  const probeFresh = useAtomQueryRunner(serverEnvironment.claudeMcpStatus, {
+    label: "refresh Claude MCP servers",
+    refresh: true,
+  });
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = () => {
+    if (probeInput === null || refreshing) return;
+    setRefreshing(true);
+    void probeFresh({ environmentId, input: { ...probeInput, fresh: true } }).then((result) => {
+      setRefreshing(false);
+      if (result._tag === "Success") query.refresh();
+    });
+  };
   const servers = query.data?.servers;
   const view = servers === undefined ? null : claudeMcpView({ servers, t3Names });
-  return { probes, view, isPending: query.isPending, error: query.error, refresh: query.refresh };
+  return { probes, view, isPending: query.isPending || refreshing, error: query.error, refresh };
 }
 
 function Tone({ row }: { readonly row: ClaudeMcpRow }) {

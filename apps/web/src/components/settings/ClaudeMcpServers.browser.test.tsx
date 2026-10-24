@@ -14,6 +14,7 @@ const probe = vi.hoisted(() => ({
   claudeMcpServerDetail: vi.fn((target: unknown) => ({ detail: target })),
   detail: null as unknown,
   refresh: vi.fn(),
+  fresh: vi.fn((_target: unknown) => Promise.resolve({ _tag: "Success" })),
   view: {
     data: null as unknown,
     error: null as string | null,
@@ -51,6 +52,10 @@ vi.mock(import("../../state/query"), async (original) => ({
           data: atom === null ? null : probe.view.data,
           refresh: probe.refresh,
         }) as never,
+}));
+
+vi.mock(import("../../state/use-atom-query-runner"), () => ({
+  useAtomQueryRunner: (() => probe.fresh) as never,
 }));
 
 import { ClaudeMcpSection } from "./ClaudeMcpServers";
@@ -109,6 +114,12 @@ describe("ClaudeMcpSection", () => {
     await expect.element(screen.getByText("Codex: not reported by this provider.")).toBeVisible();
 
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(probe.fresh).toHaveBeenCalledWith({
+      environmentId,
+      input: { cwd: "/home/me", fresh: true },
+    });
+    // The list is re-read once the fresh probe has settled.
+    await probe.fresh.mock.results[0]?.value;
     expect(probe.refresh).toHaveBeenCalledOnce();
   });
 
