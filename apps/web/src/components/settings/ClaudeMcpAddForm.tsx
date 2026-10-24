@@ -1,6 +1,6 @@
 /**
  * The form that adds a server to Claude's own config, opened from the
- * "Claude's servers" header. Claude's CLI writes the server on the
+ * "Claude's servers" header and the thread MCP panel's "Add to Claude". Claude's CLI writes the server on the
  * environment's host, so it reaches plain `claude` and every other Claude Code
  * host there, and new Claude sessions in T3.
  *
@@ -11,8 +11,10 @@ import {
   ClaudeMcpHttpServerConfig,
   MCP_HEADER_NAME_PATTERN,
   type AddClaudeMcpServerInput,
+  type ClaudeMcpAddScope,
   type ClaudeMcpAddServerConfig,
   type EnvironmentId,
+  type ProjectId,
 } from "@t3tools/contracts";
 import { PlusIcon, XIcon } from "lucide-react";
 import * as Cause from "effect/Cause";
@@ -22,11 +24,16 @@ import { useRef, useState } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { Alert, AlertDescription } from "../ui/alert";
+import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
+
+const SCOPE_NOTES: Record<ClaudeMcpAddScope, string> = {
+  user: "Saved to Claude's user config on this environment, for every project.",
+  local: "Saved to Claude's local config, private to this project on this environment.",
+};
 
 type Transport = ClaudeMcpAddServerConfig["type"];
 
@@ -72,8 +79,11 @@ function headersError(rows: ReadonlyArray<PairRow>): string | undefined {
 
 export function ClaudeMcpAddForm(props: {
   readonly environmentId: EnvironmentId;
-  /** The directory the list was probed in, re-probed after the add. */
+  /** The directory the list was probed in, re-probed after the add; a local add runs there. */
   readonly cwd: string;
+  readonly projectId?: ProjectId | undefined;
+  /** The scopes offered, the first being the default; one scope shows no choice. */
+  readonly scopes: readonly [ClaudeMcpAddScope, ...ClaudeMcpAddScope[]];
   /** Servers T3 configures here; Claude may not reuse their names. */
   readonly t3Names: ReadonlyArray<string>;
   readonly onCancel: () => void;
@@ -83,6 +93,7 @@ export function ClaudeMcpAddForm(props: {
     label: "add Claude MCP server",
     reportFailure: false,
   });
+  const [scope, setScope] = useState(props.scopes[0]);
   const [name, setName] = useState("");
   const [transport, setTransport] = useState<Transport>("stdio");
   const [command, setCommand] = useState("");
@@ -125,8 +136,9 @@ export function ClaudeMcpAddForm(props: {
         : { type: "http", url: url.trim(), headers: recordFrom(headers) };
     const input: AddClaudeMcpServerInput = {
       cwd: props.cwd,
+      ...(props.projectId === undefined ? {} : { projectId: props.projectId }),
       name: name.trim(),
-      scope: "user",
+      scope,
       server,
     };
     const result = await add({ environmentId: props.environmentId, input });
@@ -240,9 +252,25 @@ export function ClaudeMcpAddForm(props: {
       <p className="text-xs text-muted-foreground">
         Claude saves environment variables and headers as plain text in ~/.claude.json.
       </p>
+      {props.scopes.length > 1 ? (
+        <ToggleGroup
+          aria-label="Scope"
+          variant="segmented"
+          value={[scope]}
+          onValueChange={(next) => {
+            const picked = props.scopes.find((candidate) => candidate === next[0]);
+            if (picked !== undefined) setScope(picked);
+          }}
+        >
+          {props.scopes.map((candidate) => (
+            <Toggle key={candidate} value={candidate}>
+              {candidate === "local" ? "Local" : "User"}
+            </Toggle>
+          ))}
+        </ToggleGroup>
+      ) : null}
       <p className="text-xs text-muted-foreground">
-        Saved to Claude's user config on this environment, for every project. It applies to new
-        Claude sessions.
+        {SCOPE_NOTES[scope]} It applies to new Claude sessions.
       </p>
       {failure === null ? null : (
         <Alert variant="error">
@@ -330,5 +358,22 @@ function FieldError({ children }: { readonly children: string }) {
     <p role="alert" className="text-xs text-destructive">
       {children}
     </p>
+  );
+}
+
+/** Confirms an add, which only new Claude sessions pick up. */
+export function ClaudeMcpAddedNotice(props: {
+  readonly name: string;
+  readonly onDismiss: () => void;
+}) {
+  return (
+    <Alert variant="success">
+      <AlertDescription>Added {props.name}. It applies to new Claude sessions.</AlertDescription>
+      <AlertAction>
+        <Button size="xs" variant="ghost" onClick={props.onDismiss}>
+          Dismiss
+        </Button>
+      </AlertAction>
+    </Alert>
   );
 }

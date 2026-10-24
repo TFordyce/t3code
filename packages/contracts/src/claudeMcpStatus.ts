@@ -221,8 +221,11 @@ export function claudeMcpServerNameError(
   return undefined;
 }
 
-/** Where in Claude's own config an added server is saved. */
-export const ClaudeMcpAddScope = Schema.Literals(["user"]);
+/**
+ * Where in Claude's own config an added server is saved: `user` for every
+ * project, `local` private to the project at `cwd`.
+ */
+export const ClaudeMcpAddScope = Schema.Literals(["user", "local"]);
 export type ClaudeMcpAddScope = typeof ClaudeMcpAddScope.Type;
 
 /** A stdio server, in the JSON shape `claude mcp add-json` takes. */
@@ -252,7 +255,7 @@ export type ClaudeMcpAddServerConfig = typeof ClaudeMcpAddServerConfig.Type;
 /**
  * Adds a server to Claude's own config through Claude's CLI. `cwd` and
  * `projectId` name the list to re-probe afterwards, as in
- * {@link ClaudeMcpStatusInput}.
+ * {@link ClaudeMcpStatusInput}; a local add also runs Claude in `cwd`.
  */
 export const AddClaudeMcpServerInput = Schema.Struct({
   cwd: ClaudeMcpStatusInput.fields.cwd,

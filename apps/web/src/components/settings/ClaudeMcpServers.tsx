@@ -22,7 +22,7 @@ import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
-import { ClaudeMcpAddForm } from "./ClaudeMcpAddForm";
+import { ClaudeMcpAddForm, ClaudeMcpAddedNotice } from "./ClaudeMcpAddForm";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { ClaudeMcpReconnectButton } from "./ClaudeMcpReconnectButton";
@@ -224,6 +224,8 @@ export function ClaudeMcpGroups(props: {
 export function ClaudeMcpSection(props: {
   readonly environmentId: EnvironmentId;
   readonly cwd: string | null;
+  /** A selected project: `cwd` is its root, Local scope is offered, and its project servers show. */
+  readonly projectId?: ProjectId | undefined;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly t3Names: ReadonlyArray<string>;
 }) {
@@ -236,6 +238,12 @@ export function ClaudeMcpSection(props: {
   const unreported = unreportedProviderNames(props.providers);
   if (!probes && unreported.length === 0) return null;
   const { cwd } = props;
+  const groups =
+    view === null
+      ? []
+      : props.projectId === undefined
+        ? view.groups
+        : [...view.projectGroups, ...view.groups];
 
   return (
     <SettingsSection
@@ -269,6 +277,8 @@ export function ClaudeMcpSection(props: {
           <ClaudeMcpAddForm
             environmentId={props.environmentId}
             cwd={cwd}
+            projectId={props.projectId}
+            scopes={props.projectId === undefined ? ["user"] : ["local", "user"]}
             t3Names={props.t3Names}
             onCancel={() => setAdding(false)}
             onAdded={(name) => {
@@ -281,14 +291,7 @@ export function ClaudeMcpSection(props: {
       ) : null}
       {added === null ? null : (
         <div className="px-3 py-3 sm:px-4">
-          <Alert variant="success">
-            <AlertDescription>Added {added}. It applies to new Claude sessions.</AlertDescription>
-            <AlertAction>
-              <Button size="xs" variant="ghost" onClick={() => setAdded(null)}>
-                Dismiss
-              </Button>
-            </AlertAction>
-          </Alert>
+          <ClaudeMcpAddedNotice name={added} onDismiss={() => setAdded(null)} />
         </div>
       )}
       {probes && view === null && isPending ? (
@@ -313,14 +316,17 @@ export function ClaudeMcpSection(props: {
         <ClaudeMcpGroups
           environmentId={props.environmentId}
           cwd={props.cwd ?? undefined}
-          groups={view.groups}
+          projectId={props.projectId}
+          groups={groups}
           onReprobe={refresh}
           probing={isPending}
         />
       ) : null}
-      {view !== null && view.groups.length === 0 ? (
+      {view !== null && groups.length === 0 ? (
         <p className="px-3 py-3 text-sm text-muted-foreground sm:px-4">
-          Claude has no user or org servers loaded.
+          {props.projectId === undefined
+            ? "Claude has no user or org servers loaded."
+            : "Claude has no servers loaded for this project."}
         </p>
       ) : null}
       {unreported.length > 0 ? (

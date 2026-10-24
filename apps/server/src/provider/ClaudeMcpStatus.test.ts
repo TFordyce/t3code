@@ -600,6 +600,41 @@ it.effect("add runs claude mcp add-json at user scope in the probe's Claude envi
   );
 });
 
+it.effect("a local add runs at local scope with the project root as working directory", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  const cli = makeFakeCli();
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    yield* service.addServer({
+      cwd: "/work/app",
+      projectId: ProjectId.make("project-1"),
+      name: "acme",
+      scope: "local",
+      server: stdioServer,
+    });
+    assert.equal(cli.calls.length, 1);
+    const call = cli.calls[0]!;
+    assert.deepStrictEqual(call.args.slice(4), ["-s", "local"]);
+    assert.equal(call.cwd, "/work/app");
+    assert.equal(call.env.CLAUDE_CONFIG_DIR, (yield* Path.Path).resolve("/claude-home"));
+  }).pipe(
+    Effect.provide(
+      layerFor(
+        fake.query,
+        {
+          providerInstances: {
+            [ProviderInstanceId.make("claudeAgent")]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              config: { binaryPath: "/opt/claude", homePath: "/claude-home" },
+            },
+          },
+        },
+        cli.runCli,
+      ),
+    ),
+  );
+});
+
 it.effect("add passes an HTTP server to add-json as Claude's http JSON, headers included", () => {
   const fake = makeFakeQuery(() => Promise.resolve([]));
   const cli = makeFakeCli();

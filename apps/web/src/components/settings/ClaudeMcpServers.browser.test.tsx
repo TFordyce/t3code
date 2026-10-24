@@ -1,6 +1,7 @@
 import {
   ClaudeMcpAddError,
   EnvironmentId,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -448,5 +449,59 @@ describe("ClaudeMcpSection", () => {
       .element(screen.getByText("MCP server acme already exists in user config"))
       .toBeVisible();
     await expect.element(screen.getByLabelText("Server name")).toHaveValue("acme");
+  });
+  it("with a project, defaults the add to Local scope in the project's root and offers User", async () => {
+    probe.view = { data: { servers: [] }, error: null, isPending: false };
+    probe.command.mockReset();
+    probe.command.mockResolvedValue(AsyncResult.success({}));
+    const projectId = ProjectId.make("project-1");
+    await using screen = await render(
+      <ClaudeMcpSection
+        environmentId={environmentId}
+        cwd="/work/repo"
+        projectId={projectId}
+        providers={[provider("claudeAgent", "Claude")]}
+        t3Names={[]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await expect
+      .element(screen.getByRole("button", { name: "Local" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await userEvent.fill(screen.getByLabelText("Server name"), "acme");
+    await userEvent.fill(screen.getByLabelText("Command"), "npx");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    expect(probe.command).toHaveBeenLastCalledWith({
+      environmentId,
+      input: {
+        cwd: "/work/repo",
+        projectId,
+        name: "acme",
+        scope: "local",
+        server: { type: "stdio", command: "npx", args: [], env: {} },
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await userEvent.click(screen.getByRole("button", { name: "User" }));
+    await userEvent.fill(screen.getByLabelText("Server name"), "acme");
+    await userEvent.fill(screen.getByLabelText("Command"), "npx");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    expect(probe.command).toHaveBeenLastCalledWith({
+      environmentId,
+      input: expect.objectContaining({ projectId, scope: "user" }),
+    });
+  });
+
+  it("without a project, offers only User scope", async () => {
+    probe.view = { data: { servers: [] }, error: null, isPending: false };
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await expect.element(screen.getByLabelText("Server name")).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Local" })).not.toBeInTheDocument();
   });
 });
