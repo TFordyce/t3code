@@ -119,6 +119,7 @@ export function ThreadMcpPanel(props: {
           <h3 className="text-xs font-medium text-muted-foreground">Claude project servers</h3>
           <ClaudeMcpGroups
             environmentId={props.environmentId}
+            cwd={props.cwd ?? undefined}
             projectId={props.projectId ?? undefined}
             threadId={props.threadId}
             groups={claude.view.projectGroups}

@@ -86,6 +86,11 @@ A server you added in T3 Code appears as one row with both its settings and Clau
 status. Servers only Claude knows about are listed under their level with **Disable** or
 **Enable**, but T3 Code can't edit them: change their configuration in Claude Code.
 
+Click a Claude-only server's name, in Settings or a thread's **MCP** panel, to open its
+details: its status and any error, its transport with the URL or command, where it is
+configured, and its tools. From there you can **Reconnect** or **Disable** it. For servers that
+need sign-in it only tells you where to do it: on claude.ai, or with `/mcp` in Claude Code.
+
 This page shows user-level and organization-level servers. Servers tied to a project, such as
 those from the project's `.mcp.json`, appear in the **MCP** panel of a thread in that project
 instead, because they only apply there. Other providers that support MCP servers don't report
