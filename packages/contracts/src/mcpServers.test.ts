@@ -149,6 +149,7 @@ describe("sign-in", () => {
       WS_METHODS.serverSignOutMcpServer,
       WS_METHODS.serverSetClaudeMcpServerEnabled,
       WS_METHODS.serverReconnectClaudeMcpServer,
+      WS_METHODS.serverAddClaudeMcpServer,
     ]) {
       expect(clientRpcRequiredScopes(method, {})).toEqual([AuthProvidersManageScope]);
     }
