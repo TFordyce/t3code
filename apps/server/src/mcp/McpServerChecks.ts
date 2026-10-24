@@ -112,258 +112,250 @@ const missingSecret = (config: McpServerConfig) =>
 
 const isEnabled = (config: McpServerConfig) => config.enabled !== false;
 
-const make = (timeout: Duration.Duration) =>
-  Effect.gen(function* () {
-    const settings = yield* ServerSettings.ServerSettingsService;
-    const upstream = yield* McpUpstream.McpUpstream;
-    const signIn = yield* McpSignIn.McpSignIn;
-    const state = yield* SubscriptionRef.make<Checks>([]);
-    const generations = new Map<string, number>();
-    const everChecked = yield* Ref.make(false);
+const make = Effect.fn("McpServerChecks.make")(function* (timeout: Duration.Duration) {
+  const settings = yield* ServerSettings.ServerSettingsService;
+  const upstream = yield* McpUpstream.McpUpstream;
+  const signIn = yield* McpSignIn.McpSignIn;
+  const state = yield* SubscriptionRef.make<Checks>([]);
+  const generations = new Map<string, number>();
+  const everChecked = yield* Ref.make(false);
 
-    const replace = (scope: string, name: string, next: McpServerCheck | undefined) =>
-      SubscriptionRef.update(state, (checks) => {
-        const others = checks.filter((c) => !(c.scope === scope && c.name === name));
-        return next === undefined ? others : [...others, next];
+  const replace = (scope: string, name: string, next: McpServerCheck | undefined) =>
+    SubscriptionRef.update(state, (checks) => {
+      const others = checks.filter((c) => !(c.scope === scope && c.name === name));
+      return next === undefined ? others : [...others, next];
+    });
+
+  /** Lists every tool of a connected client, following pagination. */
+  const countTools = async (client: Client, signal: AbortSignal) => {
+    let count = 0;
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
+      const result = await client.listTools(cursor === undefined ? undefined : { cursor }, {
+        signal,
       });
+      count += result.tools.length;
+      cursor = result.nextCursor;
+      if (cursor === undefined) break;
+    }
+    return count;
+  };
 
-    /** Lists every tool of a connected client, following pagination. */
-    const countTools = async (client: Client, signal: AbortSignal) => {
-      let count = 0;
-      let cursor: string | undefined;
-      for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
-        const result = await client.listTools(cursor === undefined ? undefined : { cursor }, {
-          signal,
-        });
-        count += result.tools.length;
-        cursor = result.nextCursor;
-        if (cursor === undefined) break;
+  const probeStdio = async (
+    config: Extract<McpServerConfig, { transport: "stdio" }>,
+    signal: AbortSignal,
+  ): Promise<Outcome> => {
+    const client = new Client({ name: "t3-code-check", version: "1.0.0" });
+    const transport = new StdioClientTransport({
+      command: config.command,
+      args: [...config.args],
+      env: Object.fromEntries(config.env.map((row) => [row.name, row.value])),
+      stderr: "ignore",
+    });
+    try {
+      await client.connect(transport, { signal });
+      return { status: "connected", toolCount: await countTools(client, signal) };
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  };
+
+  const probeHttp = async (
+    entry: McpUpstream.McpUpstreamEntry,
+    signal: AbortSignal,
+  ): Promise<Outcome> => {
+    let challenged = false;
+    // Only POSTs are sent: the standalone SSE stream and session teardown
+    // are not needed to count tools.
+    const fetchViaUpstream = async (_url: string | URL, init?: RequestInit) => {
+      if (init?.method !== "POST" || typeof init.body !== "string") {
+        return new Response(null, { status: 405 });
       }
-      return count;
-    };
-
-    const probeStdio = async (
-      config: Extract<McpServerConfig, { transport: "stdio" }>,
-      signal: AbortSignal,
-    ): Promise<Outcome> => {
-      const client = new Client({ name: "t3-code-check", version: "1.0.0" });
-      const transport = new StdioClientTransport({
-        command: config.command,
-        args: [...config.args],
-        env: Object.fromEntries(config.env.map((row) => [row.name, row.value])),
-        stderr: "ignore",
+      const headers: Record<string, string> = {};
+      new Headers(init.headers).forEach((value, key) => {
+        headers[key] = value;
       });
-      try {
-        await client.connect(transport, { signal });
-        return { status: "connected", toolCount: await countTools(client, signal) };
-      } finally {
-        await client.close().catch(() => undefined);
-      }
-    };
-
-    const probeHttp = async (
-      entry: McpUpstream.McpUpstreamEntry,
-      signal: AbortSignal,
-    ): Promise<Outcome> => {
-      let challenged = false;
-      // Only POSTs are sent: the standalone SSE stream and session teardown
-      // are not needed to count tools.
-      const fetchViaUpstream = async (_url: string | URL, init?: RequestInit) => {
-        if (init?.method !== "POST" || typeof init.body !== "string") {
-          return new Response(null, { status: 405 });
-        }
-        const headers: Record<string, string> = {};
-        new Headers(init.headers).forEach((value, key) => {
-          headers[key] = value;
-        });
-        const sent = await Effect.runPromise(
-          Effect.scoped(
-            Effect.gen(function* () {
-              const response = yield* upstream.send(entry, {
-                method: "POST",
-                headers,
-                body: new TextEncoder().encode(init.body as string),
-              });
-              return {
-                status: response.status,
-                headers: response.headers,
-                bytes: new Uint8Array(yield* response.arrayBuffer),
-              };
-            }),
-          ),
-          { signal },
-        );
-        if (sent.status === 401 || (sent.status >= 400 && sent.headers["www-authenticate"])) {
-          challenged = true;
-        }
-        const bodyless = sent.status === 204 || sent.status === 205 || sent.bytes.length === 0;
-        return new Response(bodyless ? null : sent.bytes, {
-          status: sent.status,
-          headers: sent.headers,
-        });
-      };
-      const client = new Client({ name: "t3-code-check", version: "1.0.0" });
-      const transport = new StreamableHTTPClientTransport(new URL(entry.url), {
-        fetch: fetchViaUpstream as typeof fetch,
-      }) as Transport;
-      try {
-        await client.connect(transport, { signal });
-        return { status: "connected", toolCount: await countTools(client, signal) };
-      } catch (cause) {
-        if (challenged || (cause instanceof StreamableHTTPError && cause.code === 401)) {
-          return { status: "needs-auth" };
-        }
-        throw cause;
-      } finally {
-        await client.close().catch(() => undefined);
-      }
-    };
-
-    const probe = Effect.fn("McpServerChecks.probe")(function* (
-      scope: string,
-      name: string,
-      config: McpServerConfig,
-    ) {
-      const missing = missingSecret(config);
-      if (missing !== undefined) {
-        return failed(`The stored secret for "${missing.name}" is missing. Enter it again.`);
-      }
-      const run =
-        config.transport === "stdio"
-          ? Effect.tryPromise((signal) => probeStdio(config, signal))
-          : Effect.gen(function* () {
-              const entry = yield* upstream.resolve(
-                name,
-                scope === GLOBAL_SCOPE ? null : (scope as ProjectId),
-              );
-              if (entry === undefined) {
-                return failed("The server's stored secrets could not be read.");
-              }
-              return yield* Effect.tryPromise((signal) => probeHttp(entry, signal));
+      const sent = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const response = yield* upstream.send(entry, {
+              method: "POST",
+              headers,
+              body: new TextEncoder().encode(init.body as string),
             });
-      return yield* run.pipe(
-        Effect.timeoutOption(timeout),
-        Effect.map((outcome) =>
-          outcome._tag === "Some"
-            ? outcome.value
-            : failed(`Timed out after ${Duration.toSeconds(timeout)}s.`),
+            return {
+              status: response.status,
+              headers: response.headers,
+              bytes: new Uint8Array(yield* response.arrayBuffer),
+            };
+          }),
         ),
-        Effect.catch((cause) =>
-          Effect.succeed(failed(errorMessage("cause" in cause ? cause.cause : cause))),
-        ),
+        { signal },
       );
-    });
-
-    const checkOne = Effect.fn("McpServerChecks.checkOne")(function* (
-      target: McpServerCheckTarget,
-    ) {
-      const { scope, name } = target;
-      const key = keyOf(scope, name);
-      const current = yield* settings.getSettings.pipe(
-        Effect.catch(() => Effect.succeed(undefined)),
-      );
-      const config =
-        current === undefined ? undefined : configuredEntries(current).get(key)?.config;
-      const generation = (generations.get(key) ?? 0) + 1;
-      generations.set(key, generation);
-      if (config === undefined || !isEnabled(config)) {
-        yield* replace(scope, name, undefined);
-        return;
+      if (sent.status === 401 || (sent.status >= 400 && sent.headers["www-authenticate"])) {
+        challenged = true;
       }
-      // @effect-diagnostics-next-line globalDateInEffect:off - wall-clock timestamp shown to the user.
-      const checkedAt = new Date().toISOString();
-      const previousAuth = (yield* SubscriptionRef.get(state)).find(
-        (row) => row.scope === scope && row.name === name,
-      )?.auth;
-      yield* replace(scope, name, {
-        scope,
-        name,
-        status: "checking",
-        checkedAt,
-        ...(previousAuth === undefined ? {} : { auth: previousAuth }),
+      const bodyless = sent.status === 204 || sent.status === 205 || sent.bytes.length === 0;
+      return new Response(bodyless ? null : sent.bytes, {
+        status: sent.status,
+        headers: sent.headers,
       });
-      const outcome = yield* probe(scope, name, config);
-      // An edit or removal that landed meanwhile owns the row now.
-      if (generations.get(key) !== generation) return;
-      // `auth` stays absent until the server has shown OAuth: a sign-in exists,
-      // an OAuth client is configured, the server asked for one, or it was shown before.
-      const stored =
-        config.transport === "http" ? yield* signIn.authState({ scope, name }) : undefined;
-      const auth =
-        stored ??
-        (config.transport === "http" &&
-        (config.oauth !== undefined ||
-          outcome.status === "needs-auth" ||
-          previousAuth !== undefined)
-          ? ("signed-out" as const)
-          : undefined);
-      yield* replace(scope, name, {
-        scope,
-        name,
-        checkedAt,
-        ...outcome,
-        ...(auth === undefined ? {} : { auth }),
-      });
-    });
+    };
+    const client = new Client({ name: "t3-code-check", version: "1.0.0" });
+    const transport = new StreamableHTTPClientTransport(new URL(entry.url), {
+      fetch: fetchViaUpstream as typeof fetch,
+    }) as Transport;
+    try {
+      await client.connect(transport, { signal });
+      return { status: "connected", toolCount: await countTools(client, signal) };
+    } catch (cause) {
+      if (challenged || (cause instanceof StreamableHTTPError && cause.code === 401)) {
+        return { status: "needs-auth" };
+      }
+      throw cause;
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  };
 
-    const check: McpServerChecks["Service"]["check"] = Effect.fn("McpServerChecks.check")(
-      function* (targets) {
-        yield* Ref.set(everChecked, true);
-        const requested: ReadonlyArray<McpServerCheckTarget> =
-          targets ??
-          (yield* Effect.gen(function* () {
-            const configured = yield* settings.getSettings.pipe(
-              Effect.map((current) => [...configuredEntries(current).values()]),
-              Effect.catch(() => Effect.succeed([] as Array<ConfiguredEntry>)),
+  const probe = Effect.fn("McpServerChecks.probe")(function* (
+    scope: string,
+    name: string,
+    config: McpServerConfig,
+  ) {
+    const missing = missingSecret(config);
+    if (missing !== undefined) {
+      return failed(`The stored secret for "${missing.name}" is missing. Enter it again.`);
+    }
+    const run =
+      config.transport === "stdio"
+        ? Effect.tryPromise((signal) => probeStdio(config, signal))
+        : Effect.gen(function* () {
+            const entry = yield* upstream.resolve(
+              name,
+              scope === GLOBAL_SCOPE ? null : (scope as ProjectId),
             );
-            const held = yield* SubscriptionRef.get(state);
-            const unique = new Map<string, McpServerCheckTarget>();
-            for (const { scope, name } of [...configured, ...held]) {
-              unique.set(keyOf(scope, name), { scope, name });
+            if (entry === undefined) {
+              return failed("The server's stored secrets could not be read.");
             }
-            return [...unique.values()];
-          }));
-        yield* Effect.forEach(requested, checkOne, { concurrency: "unbounded", discard: true });
-      },
-    );
-
-    // Edits re-check just the entries whose config changed. The first
-    // emission only sets the baseline, so nothing runs at boot.
-    let previous = yield* settings.getSettings.pipe(
-      Effect.map(configuredEntries),
-      Effect.catch(() => Effect.succeed(new Map<string, ConfiguredEntry>())),
-    );
-    yield* settings.streamChanges.pipe(
-      Stream.runForEach((next) => {
-        const before = previous;
-        const after = configuredEntries(next);
-        previous = after;
-        const changed = [...new Set([...before.keys(), ...after.keys()])]
-          .filter((key) => JSON.stringify(before.get(key)) !== JSON.stringify(after.get(key)))
-          .map((key) => {
-            const entry = after.get(key) ?? before.get(key)!;
-            return { scope: entry.scope, name: entry.name };
+            return yield* Effect.tryPromise((signal) => probeHttp(entry, signal));
           });
-        return Effect.forEach(changed, checkOne, { concurrency: "unbounded", discard: true });
-      }),
-      Effect.forkScoped({ startImmediately: true }),
-    );
-
-    // A sign-in, sign-out or failed refresh shows up as a fresh check of that entry.
-    yield* signIn.changes.pipe(
-      Stream.runForEach((target) => checkOne(target)),
-      Effect.forkScoped({ startImmediately: true }),
-    );
-
-    return McpServerChecks.of({
-      current: SubscriptionRef.get(state),
-      streamChanges: SubscriptionRef.changes(state),
-      check,
-      ensureChecked: Ref.getAndSet(everChecked, true).pipe(
-        Effect.flatMap((already) => (already ? Effect.void : check())),
+    return yield* run.pipe(
+      Effect.timeoutOption(timeout),
+      Effect.map((outcome) =>
+        outcome._tag === "Some"
+          ? outcome.value
+          : failed(`Timed out after ${Duration.toSeconds(timeout)}s.`),
       ),
+      Effect.catch((cause) =>
+        Effect.succeed(failed(errorMessage("cause" in cause ? cause.cause : cause))),
+      ),
+    );
+  });
+
+  const checkOne = Effect.fn("McpServerChecks.checkOne")(function* (target: McpServerCheckTarget) {
+    const { scope, name } = target;
+    const key = keyOf(scope, name);
+    const current = yield* settings.getSettings.pipe(Effect.catch(() => Effect.succeed(undefined)));
+    const config = current === undefined ? undefined : configuredEntries(current).get(key)?.config;
+    const generation = (generations.get(key) ?? 0) + 1;
+    generations.set(key, generation);
+    if (config === undefined || !isEnabled(config)) {
+      yield* replace(scope, name, undefined);
+      return;
+    }
+    // @effect-diagnostics-next-line globalDateInEffect:off - wall-clock timestamp shown to the user.
+    const checkedAt = new Date().toISOString();
+    const previousAuth = (yield* SubscriptionRef.get(state)).find(
+      (row) => row.scope === scope && row.name === name,
+    )?.auth;
+    yield* replace(scope, name, {
+      scope,
+      name,
+      status: "checking",
+      checkedAt,
+      ...(previousAuth === undefined ? {} : { auth: previousAuth }),
+    });
+    const outcome = yield* probe(scope, name, config);
+    // An edit or removal that landed meanwhile owns the row now.
+    if (generations.get(key) !== generation) return;
+    // `auth` stays absent until the server has shown OAuth: a sign-in exists,
+    // an OAuth client is configured, the server asked for one, or it was shown before.
+    const stored =
+      config.transport === "http" ? yield* signIn.authState({ scope, name }) : undefined;
+    const auth =
+      stored ??
+      (config.transport === "http" &&
+      (config.oauth !== undefined || outcome.status === "needs-auth" || previousAuth !== undefined)
+        ? ("signed-out" as const)
+        : undefined);
+    yield* replace(scope, name, {
+      scope,
+      name,
+      checkedAt,
+      ...outcome,
+      ...(auth === undefined ? {} : { auth }),
     });
   });
+
+  const check: McpServerChecks["Service"]["check"] = Effect.fn("McpServerChecks.check")(
+    function* (targets) {
+      yield* Ref.set(everChecked, true);
+      const requested: ReadonlyArray<McpServerCheckTarget> =
+        targets ??
+        (yield* Effect.gen(function* () {
+          const configured = yield* settings.getSettings.pipe(
+            Effect.map((current) => [...configuredEntries(current).values()]),
+            Effect.catch(() => Effect.succeed([] as Array<ConfiguredEntry>)),
+          );
+          const held = yield* SubscriptionRef.get(state);
+          const unique = new Map<string, McpServerCheckTarget>();
+          for (const { scope, name } of [...configured, ...held]) {
+            unique.set(keyOf(scope, name), { scope, name });
+          }
+          return [...unique.values()];
+        }));
+      yield* Effect.forEach(requested, checkOne, { concurrency: "unbounded", discard: true });
+    },
+  );
+
+  // Edits re-check just the entries whose config changed. The first
+  // emission only sets the baseline, so nothing runs at boot.
+  let previous = yield* settings.getSettings.pipe(
+    Effect.map(configuredEntries),
+    Effect.catch(() => Effect.succeed(new Map<string, ConfiguredEntry>())),
+  );
+  yield* settings.streamChanges.pipe(
+    Stream.runForEach((next) => {
+      const before = previous;
+      const after = configuredEntries(next);
+      previous = after;
+      const changed = [...new Set([...before.keys(), ...after.keys()])]
+        .filter((key) => JSON.stringify(before.get(key)) !== JSON.stringify(after.get(key)))
+        .map((key) => {
+          const entry = after.get(key) ?? before.get(key)!;
+          return { scope: entry.scope, name: entry.name };
+        });
+      return Effect.forEach(changed, checkOne, { concurrency: "unbounded", discard: true });
+    }),
+    Effect.forkScoped({ startImmediately: true }),
+  );
+
+  // A sign-in, sign-out or failed refresh shows up as a fresh check of that entry.
+  yield* signIn.changes.pipe(
+    Stream.runForEach((target) => checkOne(target)),
+    Effect.forkScoped({ startImmediately: true }),
+  );
+
+  return McpServerChecks.of({
+    current: SubscriptionRef.get(state),
+    streamChanges: SubscriptionRef.changes(state),
+    check,
+    ensureChecked: Ref.getAndSet(everChecked, true).pipe(
+      Effect.flatMap((already) => (already ? Effect.void : check())),
+    ),
+  });
+});
 
 export const layerWithTimeout = (timeoutMs: number) =>
   Layer.effect(McpServerChecks, make(Duration.millis(timeoutMs)));
