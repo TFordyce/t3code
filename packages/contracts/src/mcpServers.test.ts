@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import { AuthProvidersManageScope } from "./auth.ts";
 import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
+import { RemoveClaudeMcpServerInput } from "./claudeMcpStatus.ts";
 import { McpServerCheck, McpServerConfig } from "./mcpServers.ts";
 import { WS_METHODS } from "./rpc.ts";
 import {
@@ -141,6 +142,22 @@ describe("server checks", () => {
   });
 });
 
+describe("removing a Claude server", () => {
+  const decodeRemove = Schema.decodeUnknownSync(RemoveClaudeMcpServerInput);
+
+  it("accepts the user and local scopes", () => {
+    for (const scope of ["user", "local"]) {
+      expect(decodeRemove({ name: "docs", scope, cwd: "/work/app" })).toMatchObject({ scope });
+    }
+  });
+
+  it("refuses scopes Claude's CLI can't remove from", () => {
+    for (const scope of ["claudeai", "plugin", "managed", "enterprise", "project", "dynamic"]) {
+      expect(() => decodeRemove({ name: "docs", scope, cwd: "/work/app" })).toThrow();
+    }
+  });
+});
+
 describe("sign-in", () => {
   it("guards start, complete and sign-out with providers-manage", () => {
     for (const method of [
@@ -149,6 +166,8 @@ describe("sign-in", () => {
       WS_METHODS.serverSignOutMcpServer,
       WS_METHODS.serverSetClaudeMcpServerEnabled,
       WS_METHODS.serverReconnectClaudeMcpServer,
+      WS_METHODS.serverRemoveClaudeMcpServer,
+      WS_METHODS.serverAddClaudeMcpServer,
     ]) {
       expect(clientRpcRequiredScopes(method, {})).toEqual([AuthProvidersManageScope]);
     }

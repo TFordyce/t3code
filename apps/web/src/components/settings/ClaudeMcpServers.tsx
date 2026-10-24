@@ -13,6 +13,8 @@ import {
   type ClaudeMcpGroup,
   type ClaudeMcpRow,
 } from "@t3tools/client-runtime/state/claude-mcp-rows";
+import { useAtomValue } from "@effect/atom-react";
+import { PlusIcon } from "lucide-react";
 import { AsyncResult } from "effect/reactivity";
 import { useState } from "react";
 
@@ -20,6 +22,7 @@ import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
+import { ClaudeMcpAddForm } from "./ClaudeMcpAddForm";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { ClaudeMcpReconnectButton } from "./ClaudeMcpReconnectButton";
@@ -42,6 +45,7 @@ const hasClaudeProvider = (providers: ReadonlyArray<ServerProvider>) =>
  * Claude is started in; null (or no Claude provider) skips the probe.
  * `refresh` asks Claude again past the server's probe cache, then re-reads
  * the list, which that fresh probe has just cached. `isPending` covers both.
+ * `reload` only re-reads the list, for after the server has re-probed itself.
  */
 export function useClaudeMcpStatus(input: {
   readonly environmentId: EnvironmentId;
@@ -76,7 +80,14 @@ export function useClaudeMcpStatus(input: {
   };
   const servers = query.data?.servers;
   const view = servers === undefined ? null : claudeMcpView({ servers, t3Names });
-  return { probes, view, isPending: query.isPending || refreshing, error: query.error, refresh };
+  return {
+    probes,
+    view,
+    isPending: query.isPending || refreshing,
+    error: query.error,
+    refresh,
+    reload: query.refresh,
+  };
 }
 
 function Tone({ row }: { readonly row: ClaudeMcpRow }) {
@@ -216,21 +227,70 @@ export function ClaudeMcpSection(props: {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly t3Names: ReadonlyArray<string>;
 }) {
-  const { probes, view, isPending, error, refresh } = useClaudeMcpStatus(props);
+  const { probes, view, isPending, error, refresh, reload } = useClaudeMcpStatus(props);
+  const canAdd = useAtomValue(
+    serverEnvironment.addClaudeMcpServer.permissionAtom(props.environmentId),
+  );
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState<string | null>(null);
   const unreported = unreportedProviderNames(props.providers);
   if (!probes && unreported.length === 0) return null;
+  const { cwd } = props;
 
   return (
     <SettingsSection
       title="Claude's servers"
       headerAction={
         probes ? (
-          <Button size="xs" variant="outline" disabled={isPending} onClick={refresh}>
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            {canAdd && cwd !== null ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={adding}
+                onClick={() => {
+                  setAdded(null);
+                  setAdding(true);
+                }}
+              >
+                <PlusIcon aria-hidden />
+                Add server
+              </Button>
+            ) : null}
+            <Button size="xs" variant="outline" disabled={isPending} onClick={refresh}>
+              Refresh
+            </Button>
+          </div>
         ) : null
       }
     >
+      {adding && cwd !== null ? (
+        <div className="px-3 py-3 sm:px-4">
+          <ClaudeMcpAddForm
+            environmentId={props.environmentId}
+            cwd={cwd}
+            t3Names={props.t3Names}
+            onCancel={() => setAdding(false)}
+            onAdded={(name) => {
+              setAdding(false);
+              setAdded(name);
+              reload();
+            }}
+          />
+        </div>
+      ) : null}
+      {added === null ? null : (
+        <div className="px-3 py-3 sm:px-4">
+          <Alert variant="success">
+            <AlertDescription>Added {added}. It applies to new Claude sessions.</AlertDescription>
+            <AlertAction>
+              <Button size="xs" variant="ghost" onClick={() => setAdded(null)}>
+                Dismiss
+              </Button>
+            </AlertAction>
+          </Alert>
+        </div>
+      )}
       {probes && view === null && isPending ? (
         <div className="flex items-center gap-2 px-3 py-3 text-sm sm:px-4">
           <Spinner className="size-3.5" />

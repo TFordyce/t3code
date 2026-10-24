@@ -61,6 +61,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetClaudeMcpServerDetail]: "server",
   [WS_METHODS.serverSetClaudeMcpServerEnabled]: "server",
   [WS_METHODS.serverReconnectClaudeMcpServer]: "server",
+  [WS_METHODS.serverRemoveClaudeMcpServer]: "server",
+  [WS_METHODS.serverAddClaudeMcpServer]: "server",
   [WS_METHODS.serverStartMcpServerSignIn]: "server",
   [WS_METHODS.serverCompleteMcpServerSignIn]: "server",
   [WS_METHODS.serverSignOutMcpServer]: "server",
