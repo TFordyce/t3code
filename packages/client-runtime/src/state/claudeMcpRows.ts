@@ -238,7 +238,9 @@ export type ClaudeMcpDetailView =
       /** The config scope, plus the source when it differs. */
       readonly location?: string;
       readonly toolCountText: string;
-      readonly tools: ClaudeMcpServerDetail["tools"];
+      readonly tools: ReadonlyArray<ClaudeMcpToolView>;
+      /** Set only when `tools` is empty: says whether the server has none or Claude can't list them yet. */
+      readonly noToolsText?: string;
     };
 
 /**
@@ -278,6 +280,42 @@ export function claudeMcpDetailView(input: {
     ...(target === undefined ? {} : { target }),
     ...(location === undefined ? {} : { location }),
     toolCountText: `${server.toolCount} ${server.toolCount === 1 ? "tool" : "tools"}`,
-    tools: server.tools,
+    tools: server.tools.map(toToolView),
+    ...(server.tools.length > 0 ? {} : { noToolsText: noToolsText(server.status) }),
+  };
+}
+
+function noToolsText(status: ClaudeMcpServerReport["status"]): string {
+  switch (status) {
+    case "connected":
+      return "This server offers no tools.";
+    case "disabled":
+      return "Enable this server to see its tools.";
+    default:
+      return "Claude lists this server's tools once it connects.";
+  }
+}
+
+/**
+ * One tool in the dialog's "View tools" list. The text is the server author's
+ * and is shown as plain text: `summary` is its first line, `description` the
+ * whole of it for expanding.
+ */
+export interface ClaudeMcpToolView {
+  readonly name: string;
+  readonly summary?: string;
+  readonly description?: string;
+  readonly readOnly: boolean;
+  readonly destructive: boolean;
+}
+
+function toToolView(tool: ClaudeMcpServerDetail["tools"][number]): ClaudeMcpToolView {
+  const description = tool.description?.trim() ?? "";
+  const summary = description.split("\n", 1)[0]?.trim() ?? "";
+  return {
+    name: tool.name,
+    ...(description.length === 0 ? {} : { summary, description }),
+    readOnly: tool.readOnly,
+    destructive: tool.destructive,
   };
 }

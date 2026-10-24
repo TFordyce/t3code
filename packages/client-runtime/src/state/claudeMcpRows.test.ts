@@ -218,6 +218,7 @@ describe("claudeMcpDetailView", () => {
       location: "User",
       toolCountText: "2 tools",
       tools: [],
+      noToolsText: "This server offers no tools.",
     });
   });
 
@@ -277,5 +278,53 @@ describe("claudeMcpDetailView", () => {
         error: null,
       }),
     ).toMatchObject({ transport: "claude.ai", location: "claude.ai" });
+  });
+});
+
+describe("claudeMcpDetailView tools", () => {
+  const toolsOf = (server: ClaudeMcpServerDetail) => {
+    const view = claudeMcpDetailView({ data: detailResult(server), isPending: false, error: null });
+    if (view.kind !== "server") throw new Error(`expected a server, got ${view.kind}`);
+    return view;
+  };
+
+  it("summarises each tool by the first line of its description and keeps its safety flags", () => {
+    const view = toolsOf(
+      detail({
+        tools: [
+          {
+            name: "search",
+            description: "\n  Search the docs.  \nReturns up to 10 results.\n",
+            readOnly: true,
+            destructive: false,
+          },
+          { name: "delete_page", readOnly: false, destructive: true },
+        ],
+      }),
+    );
+    expect(view.tools).toEqual([
+      {
+        name: "search",
+        summary: "Search the docs.",
+        description: "Search the docs.  \nReturns up to 10 results.",
+        readOnly: true,
+        destructive: false,
+      },
+      { name: "delete_page", readOnly: false, destructive: true },
+    ]);
+    expect(view).not.toHaveProperty("noToolsText");
+  });
+
+  it("says clearly when a server offers no tools, and why when it is not connected", () => {
+    expect(toolsOf(detail({ toolCount: 0 }))).toMatchObject({
+      tools: [],
+      noToolsText: "This server offers no tools.",
+    });
+    expect(toolsOf(detail({ status: "disabled", toolCount: 0 }))).toMatchObject({
+      noToolsText: "Enable this server to see its tools.",
+    });
+    expect(toolsOf(detail({ status: "needs-auth", toolCount: 0 }))).toMatchObject({
+      noToolsText: "Claude lists this server's tools once it connects.",
+    });
   });
 });

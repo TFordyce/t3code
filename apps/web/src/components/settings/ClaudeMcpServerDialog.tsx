@@ -9,12 +9,16 @@ import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   claudeMcpDetailView,
   type ClaudeMcpTone,
+  type ClaudeMcpToolView,
 } from "@t3tools/client-runtime/state/claude-mcp-rows";
+import { ChevronRightIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   Dialog,
   DialogClose,
@@ -39,6 +43,60 @@ function Field(props: { readonly label: string; readonly children: ReactNode }) 
       <dt className="text-muted-foreground">{props.label}</dt>
       <dd className="min-w-0 break-words text-foreground">{props.children}</dd>
     </div>
+  );
+}
+
+/** One tool; its description is the server author's text, so it stays plain text. */
+function ClaudeMcpTool(props: { readonly tool: ClaudeMcpToolView }) {
+  const { tool } = props;
+  const heading = (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="truncate font-mono text-xs text-foreground">{tool.name}</span>
+      {tool.readOnly ? <Badge variant="info">Read-only</Badge> : null}
+      {tool.destructive ? <Badge variant="error">Destructive</Badge> : null}
+    </span>
+  );
+  if (tool.description === undefined) return <li className="py-1.5">{heading}</li>;
+  return (
+    <li>
+      <Collapsible>
+        <CollapsibleTrigger className="group flex w-full min-w-0 flex-col items-start gap-0.5 py-1.5 text-left">
+          {heading}
+          <span className="w-full truncate text-xs text-muted-foreground group-data-panel-open:hidden">
+            {tool.summary}
+          </span>
+        </CollapsibleTrigger>
+        <CollapsiblePanel animate={false}>
+          <p className="whitespace-pre-wrap break-words pb-1.5 text-xs text-muted-foreground">
+            {tool.description}
+          </p>
+        </CollapsiblePanel>
+      </Collapsible>
+    </li>
+  );
+}
+
+function ClaudeMcpTools(props: {
+  readonly tools: ReadonlyArray<ClaudeMcpToolView>;
+  readonly noToolsText?: string | undefined;
+}) {
+  if (props.noToolsText !== undefined) {
+    return <p className="text-sm text-muted-foreground">{props.noToolsText}</p>;
+  }
+  return (
+    <Collapsible>
+      <CollapsibleTrigger className="group flex items-center gap-1 text-sm font-medium text-foreground">
+        <ChevronRightIcon aria-hidden className="size-3.5 group-data-panel-open:rotate-90" />
+        View tools
+      </CollapsibleTrigger>
+      <CollapsiblePanel animate={false}>
+        <ul className="mt-1 max-h-72 divide-y overflow-y-auto">
+          {props.tools.map((tool) => (
+            <ClaudeMcpTool key={tool.name} tool={tool} />
+          ))}
+        </ul>
+      </CollapsiblePanel>
+    </Collapsible>
   );
 }
 
@@ -72,28 +130,33 @@ function ClaudeMcpServerDetail(props: {
       return <p className="text-sm text-muted-foreground">{view.message}</p>;
     case "server":
       return (
-        <dl className="space-y-2">
-          <Field label="Status">
-            <span className="flex items-center gap-2">
-              <span className={TONE_CLASS[view.tone]}>{view.statusText}</span>
-              {view.refreshing ? <Spinner className="size-3.5" /> : null}
-            </span>
-            {view.error === undefined ? null : (
-              <span className="block text-xs text-destructive">{view.error}</span>
-            )}
-          </Field>
-          {view.serverInfo === undefined ? null : <Field label="Server">{view.serverInfo}</Field>}
-          {view.transport === undefined ? null : (
-            <Field label="Transport">
-              {view.transport}
-              {view.target === undefined ? null : (
-                <span className="block font-mono text-xs text-muted-foreground">{view.target}</span>
+        <div className="space-y-3">
+          <dl className="space-y-2">
+            <Field label="Status">
+              <span className="flex items-center gap-2">
+                <span className={TONE_CLASS[view.tone]}>{view.statusText}</span>
+                {view.refreshing ? <Spinner className="size-3.5" /> : null}
+              </span>
+              {view.error === undefined ? null : (
+                <span className="block text-xs text-destructive">{view.error}</span>
               )}
             </Field>
-          )}
-          {view.location === undefined ? null : <Field label="Config">{view.location}</Field>}
-          <Field label="Tools">{view.toolCountText}</Field>
-        </dl>
+            {view.serverInfo === undefined ? null : <Field label="Server">{view.serverInfo}</Field>}
+            {view.transport === undefined ? null : (
+              <Field label="Transport">
+                {view.transport}
+                {view.target === undefined ? null : (
+                  <span className="block font-mono text-xs text-muted-foreground">
+                    {view.target}
+                  </span>
+                )}
+              </Field>
+            )}
+            {view.location === undefined ? null : <Field label="Config">{view.location}</Field>}
+            <Field label="Tools">{view.toolCountText}</Field>
+          </dl>
+          <ClaudeMcpTools tools={view.tools} noToolsText={view.noToolsText} />
+        </div>
       );
   }
 }
