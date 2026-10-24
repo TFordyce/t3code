@@ -76,6 +76,12 @@ const APPROVAL_NOTE = "Tool calls go through each provider's normal approval.";
 
 export function McpServersSettingsPanel() {
   const { environment, scope, target } = useSettingsScope();
+  const projectId =
+    environment !== null &&
+    target?.projectId != null &&
+    target.environmentId === environment.environmentId
+      ? target.projectId
+      : null;
   if (environment === null) {
     return (
       <SettingsScopeNotice target="environment">
@@ -89,9 +95,13 @@ export function McpServersSettingsPanel() {
       environmentId={environment.environmentId}
       environmentLabel={environment.label}
       projectScoped={scope.kind === "project" || scope.kind === "checkout"}
-      projectId={
-        target?.projectId != null && target.environmentId === environment.environmentId
-          ? target.projectId
+      projectId={projectId}
+      projectRoot={
+        scope.kind === "project" || scope.kind === "checkout"
+          ? (scope.members.find(
+              (member) =>
+                member.environmentId === environment.environmentId && member.id === projectId,
+            )?.workspaceRoot ?? null)
           : null
       }
     />
@@ -103,11 +113,14 @@ function McpServersEnvironmentPanel({
   environmentLabel,
   projectScoped,
   projectId,
+  projectRoot,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   readonly projectScoped: boolean;
   readonly projectId: ProjectId | null;
+  /** The selected project's root on this environment, where Claude is probed for it. */
+  readonly projectRoot: string | null;
 }) {
   const servers = useEnvironmentSettings(environmentId, (settings) => settings.mcpServers);
   const projectOverrides = useEnvironmentSettings(
@@ -277,6 +290,13 @@ function McpServersEnvironmentPanel({
           </SettingsGroup>
           <p className="px-3 text-xs text-muted-foreground sm:px-4">{APPROVAL_NOTE}</p>
         </SettingsSection>
+        <ClaudeMcpSection
+          environmentId={environmentId}
+          cwd={projectRoot}
+          projectId={projectId}
+          providers={providers}
+          t3Names={allNames}
+        />
       </SettingsPageContainer>
     );
   }
