@@ -329,7 +329,9 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
   });
 
   // Keys with a fresh probe in flight: a second fresh request joins it rather
-  // than dropping it and starting another Claude process.
+  // than dropping it and starting another Claude process. The Cache alone can't
+  // tell: `invalidate` drops an in-flight entry too, and `refresh` always runs
+  // a new lookup.
   const freshInFlight = MutableHashSet.empty<ProbeKey>();
   const probeFresh = (key: ProbeKey) =>
     Effect.suspend(() => {

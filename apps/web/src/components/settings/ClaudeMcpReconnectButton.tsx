@@ -1,8 +1,8 @@
 /**
  * The Reconnect control for one Claude MCP server. With `threadId` (the thread
  * panel) it reconnects the thread's running Claude process, then calls
- * `onReconnected` to re-probe. On global Settings there is no thread, and
- * Reconnect is just `onReconnected`: each fresh probe starts a new Claude
+ * `onReprobe` to ask Claude again. On global Settings there is no thread, and
+ * Reconnect is just `onReprobe`: each fresh probe starts a new Claude
  * process. With neither it is disabled with its reason. Hidden when the
  * session lacks the grant, since the server would refuse the request.
  *
@@ -23,7 +23,8 @@ export function ClaudeMcpReconnectButton({
   environmentId,
   threadId,
   name,
-  onReconnected,
+  onReprobe,
+  disabled = false,
   size = "xs",
 }: {
   readonly environmentId: EnvironmentId;
@@ -31,7 +32,9 @@ export function ClaudeMcpReconnectButton({
   readonly threadId?: ThreadId | undefined;
   readonly name: string;
   /** Asks Claude again: after a live reconnect, or on its own without a thread. */
-  readonly onReconnected?: (() => void) | undefined;
+  readonly onReprobe?: (() => void) | undefined;
+  /** Held while a probe is already running. */
+  readonly disabled?: boolean | undefined;
   readonly size?: ComponentProps<typeof Button>["size"];
 }) {
   const canReconnect = useAtomValue(
@@ -41,20 +44,20 @@ export function ClaudeMcpReconnectButton({
     label: "reconnect Claude MCP server",
   });
   if (!canReconnect) return null;
-  const unavailable = threadId === undefined && onReconnected === undefined;
+  const unavailable = threadId === undefined && onReprobe === undefined;
   return (
     <Button
       size={size}
       variant="outline"
-      disabled={unavailable}
+      disabled={unavailable || disabled}
       title={unavailable ? NO_ACTIVE_SESSION_REASON : undefined}
       onClick={() => {
         if (threadId === undefined) {
-          onReconnected?.();
+          onReprobe?.();
           return;
         }
         void reconnect({ environmentId, input: { threadId, name } }).then((result) => {
-          if (AsyncResult.isSuccess(result)) onReconnected?.();
+          if (AsyncResult.isSuccess(result)) onReprobe?.();
         });
       }}
     >

@@ -23,6 +23,7 @@ export function ClaudeMcpToggleButton({
   name,
   status,
   onToggled,
+  disabled = false,
   size = "xs",
 }: {
   readonly environmentId: EnvironmentId;
@@ -30,6 +31,8 @@ export function ClaudeMcpToggleButton({
   readonly name: string;
   readonly status: ClaudeMcpServerStatusValue;
   readonly onToggled?: (() => void) | undefined;
+  /** Held while a probe is already running. */
+  readonly disabled?: boolean | undefined;
   readonly size?: ComponentProps<typeof Button>["size"];
 }) {
   const canToggle = useAtomValue(
@@ -44,6 +47,7 @@ export function ClaudeMcpToggleButton({
     <Button
       size={size}
       variant="outline"
+      disabled={disabled}
       onClick={() =>
         void toggle({
           environmentId,

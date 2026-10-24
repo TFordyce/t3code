@@ -7,11 +7,13 @@
  */
 import type { EnvironmentId, ProjectId, ServerProvider, ThreadId } from "@t3tools/contracts";
 import {
+  claudeMcpProbeInput,
   claudeMcpView,
   unreportedProviderNames,
   type ClaudeMcpGroup,
   type ClaudeMcpRow,
 } from "@t3tools/client-runtime/state/claude-mcp-rows";
+import { AsyncResult } from "effect/reactivity";
 import { useState } from "react";
 
 import { serverEnvironment } from "../../state/server";
@@ -21,7 +23,7 @@ import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { ClaudeMcpReconnectButton } from "./ClaudeMcpReconnectButton";
-import { ClaudeMcpServerDialog } from "./ClaudeMcpServerDialog";
+import { ClaudeMcpServerDialog, TONE_CLASS } from "./ClaudeMcpServerDialog";
 import { ClaudeMcpToggleButton } from "./ClaudeMcpToggleButton";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsSection } from "./settingsLayout";
@@ -39,7 +41,7 @@ const hasClaudeProvider = (providers: ReadonlyArray<ServerProvider>) =>
  * Claude's report for an environment, read on mount. `cwd` is the directory
  * Claude is started in; null (or no Claude provider) skips the probe.
  * `refresh` asks Claude again past the server's probe cache, then re-reads
- * the list, which that fresh probe has just cached.
+ * the list, which that fresh probe has just cached. `isPending` covers both.
  */
 export function useClaudeMcpStatus(input: {
   readonly environmentId: EnvironmentId;
@@ -51,7 +53,7 @@ export function useClaudeMcpStatus(input: {
 }) {
   const { environmentId, cwd, projectId, providers, t3Names } = input;
   const probes = cwd !== null && hasClaudeProvider(providers);
-  const probeInput = probes ? { cwd, ...(projectId === undefined ? {} : { projectId }) } : null;
+  const probeInput = probes ? claudeMcpProbeInput(cwd, projectId) : null;
   const query = useEnvironmentQuery(
     probeInput === null
       ? null
@@ -61,13 +63,15 @@ export function useClaudeMcpStatus(input: {
     label: "refresh Claude MCP servers",
     refresh: true,
   });
+  // The runner exposes no pending state, and reading the fresh atom to get one
+  // would itself start a probe, so the in-flight fresh probe is tracked here.
   const [refreshing, setRefreshing] = useState(false);
   const refresh = () => {
     if (probeInput === null || refreshing) return;
     setRefreshing(true);
     void probeFresh({ environmentId, input: { ...probeInput, fresh: true } }).then((result) => {
       setRefreshing(false);
-      if (result._tag === "Success") query.refresh();
+      if (AsyncResult.isSuccess(result)) query.refresh();
     });
   };
   const servers = query.data?.servers;
@@ -76,19 +80,7 @@ export function useClaudeMcpStatus(input: {
 }
 
 function Tone({ row }: { readonly row: ClaudeMcpRow }) {
-  return (
-    <p
-      className={
-        row.tone === "error"
-          ? "truncate text-xs text-destructive"
-          : row.tone === "warning"
-            ? "truncate text-xs text-warning-foreground"
-            : "truncate text-xs text-muted-foreground"
-      }
-    >
-      {row.statusText}
-    </p>
-  );
+  return <p className={`truncate text-xs ${TONE_CLASS[row.tone]}`}>{row.statusText}</p>;
 }
 
 /**
@@ -99,7 +91,7 @@ export function ClaudeLiveStatus(props: {
   readonly row: ClaudeMcpRow | undefined;
   readonly environmentId: EnvironmentId;
   readonly threadId?: ThreadId | undefined;
-  readonly onReconnected?: (() => void) | undefined;
+  readonly onReprobe?: (() => void) | undefined;
 }) {
   const { row } = props;
   if (row === undefined) return null;
@@ -111,7 +103,7 @@ export function ClaudeLiveStatus(props: {
           environmentId={props.environmentId}
           threadId={props.threadId}
           name={row.name}
-          onReconnected={props.onReconnected}
+          onReprobe={props.onReprobe}
         />
       ) : null}
     </div>
@@ -120,17 +112,18 @@ export function ClaudeLiveStatus(props: {
 
 /**
  * Claude-only servers grouped by scope, each with its Enable/Disable control
- * and, when failed, Reconnect. `onReconnected` asks Claude again; it runs after
- * a reconnect or toggle, and is Reconnect itself without a `threadId`. With
- * `cwd`, the directory the list was probed in, clicking a row opens its detail
- * dialog.
+ * and, when failed, Reconnect. `onReprobe` asks Claude again; it runs after
+ * a reconnect or toggle, and is Reconnect itself without a `threadId`; pass
+ * `probing` while it runs. With `cwd`, the directory the list was probed in,
+ * clicking a row opens its detail dialog.
  */
 export function ClaudeMcpGroups(props: {
   readonly environmentId: EnvironmentId;
   readonly cwd?: string | undefined;
   readonly projectId?: ProjectId | undefined;
   readonly threadId?: ThreadId | undefined;
-  readonly onReconnected?: (() => void) | undefined;
+  readonly onReprobe?: (() => void) | undefined;
+  readonly probing?: boolean | undefined;
   readonly groups: ReadonlyArray<ClaudeMcpGroup>;
 }) {
   const [openName, setOpenName] = useState<string | null>(null);
@@ -143,7 +136,8 @@ export function ClaudeMcpGroups(props: {
           cwd={cwd}
           projectId={props.projectId}
           threadId={props.threadId}
-          onReconnected={props.onReconnected}
+          onReprobe={props.onReprobe}
+          probing={props.probing}
           name={openName}
           onClose={() => setOpenName(null)}
         />
@@ -196,7 +190,7 @@ export function ClaudeMcpGroups(props: {
                       environmentId={props.environmentId}
                       threadId={props.threadId}
                       name={row.name}
-                      onReconnected={props.onReconnected}
+                      onReprobe={props.onReprobe}
                     />
                   ) : null}
                   <ClaudeMcpToggleButton
@@ -204,7 +198,7 @@ export function ClaudeMcpGroups(props: {
                     projectId={props.projectId}
                     name={row.name}
                     status={row.status}
-                    onToggled={props.onReconnected}
+                    onToggled={props.onReprobe}
                   />
                 </div>
               </div>
@@ -260,7 +254,8 @@ export function ClaudeMcpSection(props: {
           environmentId={props.environmentId}
           cwd={props.cwd ?? undefined}
           groups={view.groups}
-          onReconnected={refresh}
+          onReprobe={refresh}
+          probing={isPending}
         />
       ) : null}
       {view !== null && view.groups.length === 0 ? (

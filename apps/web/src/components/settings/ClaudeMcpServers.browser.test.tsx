@@ -251,4 +251,33 @@ describe("ClaudeMcpSection", () => {
       input: { cwd: "/home/me", fresh: true },
     });
   });
+
+  it("shows the open dialog probing, with its actions held, until the fresh probe settles", async () => {
+    probe.view = {
+      data: { servers: [{ name: "docs", status: "failed", toolCount: 0, scope: "user" }] },
+      error: null,
+      isPending: false,
+    };
+    probe.detail = {
+      server: { name: "docs", status: "failed", toolCount: 0, scope: "user", tools: [] },
+      checkedAt: "2026-10-24T10:00:00.000Z",
+    };
+    let settle: (result: { _tag: "Success" }) => void = () => {};
+    probe.fresh.mockImplementationOnce(
+      () => new Promise<{ _tag: "Success" }>((resolve) => (settle = resolve)),
+    );
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: /docs/ }));
+    const dialog = screen.getByRole("dialog");
+    clickInDialog(dialog.getByRole("button", { name: "Reconnect" }));
+
+    await expect.element(dialog.getByRole("status")).toBeVisible();
+    await expect.element(dialog.getByRole("button", { name: "Reconnect" })).toBeDisabled();
+    await expect.element(dialog.getByRole("button", { name: "Disable" })).toBeDisabled();
+
+    settle(AsyncResult.success(undefined));
+    await expect.element(dialog.getByRole("button", { name: "Reconnect" })).toBeEnabled();
+    await expect.element(dialog.getByRole("status")).not.toBeInTheDocument();
+  });
 });

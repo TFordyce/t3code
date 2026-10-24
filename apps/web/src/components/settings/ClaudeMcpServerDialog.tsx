@@ -2,14 +2,16 @@
  * What Claude reports about one of its MCP servers, opened from a Claude-only
  * row. The detail is read from the server's cached probe (probing on a miss)
  * and follows the list in place when it is refreshed, so Reconnect and
- * Enable/Disable (both followed by `onReconnected`, a fresh probe) update the
- * open dialog.
+ * Enable/Disable (both followed by `onReprobe`, a fresh probe) update the open
+ * dialog. While any probe runs the dialog shows a spinner and holds its actions.
  *
  * @module ClaudeMcpServerDialog
  */
 import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import {
   claudeMcpDetailView,
+  claudeMcpProbeInput,
+  type ClaudeMcpDetailView,
   type ClaudeMcpGuidance,
   type ClaudeMcpTone,
   type ClaudeMcpToolView,
@@ -35,7 +37,8 @@ import { Spinner } from "../ui/spinner";
 import { ClaudeMcpReconnectButton } from "./ClaudeMcpReconnectButton";
 import { ClaudeMcpToggleButton } from "./ClaudeMcpToggleButton";
 
-const TONE_CLASS: Record<ClaudeMcpTone, string> = {
+/** Text colour for a Claude status line, shared by the rows and this dialog. */
+export const TONE_CLASS: Record<ClaudeMcpTone, string> = {
   success: "text-success-foreground",
   warning: "text-warning-foreground",
   error: "text-destructive",
@@ -112,18 +115,15 @@ interface DetailTarget {
   readonly name: string;
 }
 
-function useClaudeMcpDetail(props: DetailTarget) {
+/** The open server's view; `probing` marks a fresh probe the detail query can't see yet. */
+function useClaudeMcpDetail(props: DetailTarget & { readonly probing: boolean }) {
   const query = useEnvironmentQuery(
     serverEnvironment.claudeMcpServerDetail({
       environmentId: props.environmentId,
-      input: {
-        cwd: props.cwd,
-        ...(props.projectId === undefined ? {} : { projectId: props.projectId }),
-        name: props.name,
-      },
+      input: { ...claudeMcpProbeInput(props.cwd, props.projectId), name: props.name },
     }),
   );
-  return claudeMcpDetailView(query);
+  return claudeMcpDetailView({ ...query, isPending: query.isPending || props.probing });
 }
 
 function Guidance({ guidance }: { readonly guidance: ClaudeMcpGuidance }) {
@@ -141,8 +141,7 @@ function Guidance({ guidance }: { readonly guidance: ClaudeMcpGuidance }) {
   );
 }
 
-function ClaudeMcpServerDetail(props: DetailTarget) {
-  const view = useClaudeMcpDetail(props);
+function ClaudeMcpServerDetail({ view }: { readonly view: ClaudeMcpDetailView }) {
   switch (view.kind) {
     case "loading":
       return (
@@ -189,13 +188,14 @@ function ClaudeMcpServerDetail(props: DetailTarget) {
 }
 
 /** Reconnect and Enable/Disable for the open server, as the view-model offers them. */
-function ClaudeMcpServerActions(
-  props: DetailTarget & {
-    readonly threadId?: ThreadId | undefined;
-    readonly onReconnected?: (() => void) | undefined;
-  },
-) {
-  const view = useClaudeMcpDetail(props);
+function ClaudeMcpServerActions(props: {
+  readonly view: ClaudeMcpDetailView;
+  readonly environmentId: EnvironmentId;
+  readonly projectId?: ProjectId | undefined;
+  readonly threadId?: ThreadId | undefined;
+  readonly onReprobe?: (() => void) | undefined;
+}) {
+  const { view } = props;
   if (view.kind !== "server") return null;
   return (
     <>
@@ -204,7 +204,8 @@ function ClaudeMcpServerActions(
           environmentId={props.environmentId}
           threadId={props.threadId}
           name={view.name}
-          onReconnected={props.onReconnected}
+          onReprobe={props.onReprobe}
+          disabled={view.refreshing}
           size="default"
         />
       ) : null}
@@ -214,7 +215,8 @@ function ClaudeMcpServerActions(
           projectId={props.projectId}
           name={view.name}
           status={view.status}
-          onToggled={props.onReconnected}
+          onToggled={props.onReprobe}
+          disabled={view.refreshing}
           size="default"
         />
       ) : null}
@@ -229,7 +231,9 @@ export function ClaudeMcpServerDialog(props: {
   /** The thread whose running Claude process Reconnect reaches; absent on Settings. */
   readonly threadId?: ThreadId | undefined;
   /** Asks Claude again; runs after Reconnect or a toggle, and is Reconnect without a thread. */
-  readonly onReconnected?: (() => void) | undefined;
+  readonly onReprobe?: (() => void) | undefined;
+  /** A fresh probe for this directory is running. */
+  readonly probing?: boolean | undefined;
   /** The open server's name; null keeps the dialog closed. */
   readonly name: string | null;
   readonly onClose: () => void;
@@ -240,30 +244,41 @@ export function ClaudeMcpServerDialog(props: {
         <DialogHeader>
           <DialogTitle>{props.name}</DialogTitle>
         </DialogHeader>
-        <DialogPanel>
-          {props.name === null ? null : (
-            <ClaudeMcpServerDetail
-              environmentId={props.environmentId}
-              cwd={props.cwd}
-              projectId={props.projectId}
-              name={props.name}
-            />
-          )}
-        </DialogPanel>
-        <DialogFooter variant="bare">
-          {props.name === null ? null : (
-            <ClaudeMcpServerActions
-              environmentId={props.environmentId}
-              cwd={props.cwd}
-              projectId={props.projectId}
-              threadId={props.threadId}
-              onReconnected={props.onReconnected}
-              name={props.name}
-            />
-          )}
-          <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
-        </DialogFooter>
+        {props.name === null ? (
+          <DialogFooter variant="bare">
+            <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
+          </DialogFooter>
+        ) : (
+          <ClaudeMcpServerDialogBody {...props} name={props.name} />
+        )}
       </DialogPopup>
     </Dialog>
+  );
+}
+
+function ClaudeMcpServerDialogBody(
+  props: DetailTarget & {
+    readonly threadId?: ThreadId | undefined;
+    readonly onReprobe?: (() => void) | undefined;
+    readonly probing?: boolean | undefined;
+  },
+) {
+  const view = useClaudeMcpDetail({ ...props, probing: props.probing === true });
+  return (
+    <>
+      <DialogPanel>
+        <ClaudeMcpServerDetail view={view} />
+      </DialogPanel>
+      <DialogFooter variant="bare">
+        <ClaudeMcpServerActions
+          view={view}
+          environmentId={props.environmentId}
+          projectId={props.projectId}
+          threadId={props.threadId}
+          onReprobe={props.onReprobe}
+        />
+        <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
+      </DialogFooter>
+    </>
   );
 }

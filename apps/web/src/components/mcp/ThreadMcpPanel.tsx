@@ -103,7 +103,7 @@ export function ThreadMcpPanel(props: {
                     environmentId={props.environmentId}
                     threadId={props.threadId}
                     name={row.name}
-                    onReconnected={claude.refresh}
+                    onReprobe={claude.refresh}
                   />
                 ) : null}
                 <Badge variant={STATUS_BADGE_VARIANT[row.status]}>
@@ -123,7 +123,8 @@ export function ThreadMcpPanel(props: {
             projectId={props.projectId ?? undefined}
             threadId={props.threadId}
             groups={claude.view.projectGroups}
-            onReconnected={claude.refresh}
+            onReprobe={claude.refresh}
+            probing={claude.isPending}
           />
         </div>
       ) : null}

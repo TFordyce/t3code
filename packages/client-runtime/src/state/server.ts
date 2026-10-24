@@ -39,6 +39,7 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
+import { claudeMcpProbeInput } from "./claudeMcpRows.ts";
 import {
   isRpcClientError,
   request,
@@ -1198,10 +1199,7 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetClaudeMcpServerDetail,
       staleTimeMs: 5 * 60_000,
       refreshTrigger: ({ environmentId, input: { cwd, projectId } }) =>
-        claudeMcpStatus({
-          environmentId,
-          input: { cwd, ...(projectId === undefined ? {} : { projectId }) },
-        }),
+        claudeMcpStatus({ environmentId, input: claudeMcpProbeInput(cwd, projectId) }),
     }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",

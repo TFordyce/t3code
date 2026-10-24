@@ -3,8 +3,19 @@ import {
   type ClaudeMcpServerDetail,
   type ClaudeMcpServerDetailResult,
   type ClaudeMcpServerReport,
+  type ClaudeMcpStatusInput,
   type ClaudeMcpTransportKind,
+  type ProjectId,
 } from "@t3tools/contracts";
+
+/**
+ * The list probe's input for a directory, naming the project only when there is
+ * one; the detail query adds `name`, and keys its refresh on this same input.
+ */
+export const claudeMcpProbeInput = (
+  cwd: string,
+  projectId: ProjectId | undefined,
+): ClaudeMcpStatusInput => ({ cwd, ...(projectId === undefined ? {} : { projectId }) });
 
 export type ClaudeMcpTone = "neutral" | "success" | "warning" | "error";
 
@@ -29,26 +40,40 @@ export interface ClaudeMcpGroup {
 }
 
 /** Servers that depend on the project directory Claude was started in; the thread panel shows these. */
-const PROJECT_GROUP_LABELS: ReadonlyArray<readonly [scope: string, label: string]> = [
-  ["project", "Project"],
-  ["local", "Local"],
-  ["dynamic", "Dynamic"],
-  ["agent", "Agent"],
-];
+const PROJECT_SCOPES = ["project", "local", "dynamic", "agent"] as const;
 
 /** The user and org levels, in display order, for Settings. */
-const GROUP_LABELS: ReadonlyArray<readonly [scope: string, label: string]> = [
-  ["user", "User"],
-  ["claudeai", "claude.ai"],
-  ["managed", "Managed"],
-  ["enterprise", "Enterprise"],
-  ["plugin", "Plugins"],
-  ["sdk", "SDK"],
-];
+const USER_SCOPES = ["user", "claudeai", "managed", "enterprise", "plugin", "sdk"] as const;
+
+type KnownScope = (typeof PROJECT_SCOPES)[number] | (typeof USER_SCOPES)[number];
+
+/**
+ * Labels for the scopes T3 knows. The contract carries `scope` and `source` as
+ * the SDK's open strings, so anything else is shown as-is.
+ */
+const SCOPE_LABELS: Record<KnownScope, string> = {
+  user: "User",
+  project: "Project",
+  local: "Local",
+  dynamic: "Dynamic",
+  agent: "Agent",
+  claudeai: "claude.ai",
+  managed: "Managed",
+  enterprise: "Enterprise",
+  plugin: "Plugin",
+  sdk: "SDK",
+};
+
+const isKnownScope = (scope: string | undefined): scope is KnownScope =>
+  scope !== undefined && Object.hasOwn(SCOPE_LABELS, scope);
+
+const scopeLabel = (scope: string) => (isKnownScope(scope) ? SCOPE_LABELS[scope] : scope);
+
+/** A group heading names the scope, except plugins, which are several sources. */
+const groupLabel = (scope: KnownScope) => (scope === "plugin" ? "Plugins" : SCOPE_LABELS[scope]);
 
 /** Where servers with no scope, or one this list does not know, land so they never vanish. */
 const OTHER_SCOPE = "other";
-const OTHER_GROUP_LABEL: readonly [scope: string, label: string] = [OTHER_SCOPE, "Other"];
 
 const CLAUDE_AI_CONNECTORS_URL = "https://claude.ai/settings/connectors";
 
@@ -60,20 +85,28 @@ const TONES: Record<ClaudeMcpServerReport["status"], ClaudeMcpTone> = {
   disabled: "neutral",
 };
 
+const STATUS_TEXT: Record<ClaudeMcpServerReport["status"], string> = {
+  connected: "Connected",
+  pending: "Connecting...",
+  failed: "Failed",
+  "needs-auth": "Needs sign-in",
+  disabled: "Disabled",
+};
+
+const toolCountText = (count: number) => `${count} ${count === 1 ? "tool" : "tools"}`;
+
+/** A row's status line: the status, plus the tool count or error that explains it. */
 function describeReport(report: ClaudeMcpServerReport): string {
+  const status = STATUS_TEXT[report.status];
   switch (report.status) {
     case "connected":
-      return `Connected · ${report.toolCount} ${report.toolCount === 1 ? "tool" : "tools"}`;
-    case "pending":
-      return "Connecting...";
-    case "needs-auth":
-      return "Needs sign-in";
-    case "disabled":
-      return "Disabled";
+      return `${status} · ${toolCountText(report.toolCount)}`;
     case "failed":
       return report.error === undefined || report.error.length === 0
-        ? "Failed"
-        : `Failed · ${report.error}`;
+        ? status
+        : `${status} · ${report.error}`;
+    default:
+      return status;
   }
 }
 
@@ -134,27 +167,26 @@ export function claudeMcpView(input: {
     } else if (t3Names.has(report.name)) {
       merged.set(report.name, toRow(report));
     } else {
-      const known = [...GROUP_LABELS, ...PROJECT_GROUP_LABELS].some(
-        ([scope]) => scope === report.scope,
-      );
-      const scope = known ? report.scope! : OTHER_SCOPE;
+      const scope = isKnownScope(report.scope) ? report.scope : OTHER_SCOPE;
       const rows = byScope.get(scope) ?? [];
       rows.push(withGuidance(report));
       byScope.set(scope, rows);
     }
   }
-  const toGroups = (labels: typeof GROUP_LABELS) =>
-    labels.flatMap(([scope, label]): ClaudeMcpGroup[] => {
-      const rows = byScope.get(scope);
-      return rows === undefined
-        ? []
-        : [{ scope, label, rows: [...rows].sort((a, b) => a.name.localeCompare(b.name)) }];
-    });
+  const toGroup = (scope: string, label: string): ClaudeMcpGroup[] => {
+    const rows = byScope.get(scope);
+    return rows === undefined
+      ? []
+      : [{ scope, label, rows: [...rows].sort((a, b) => a.name.localeCompare(b.name)) }];
+  };
   return {
     builtIn,
     merged,
-    groups: toGroups([...GROUP_LABELS, OTHER_GROUP_LABEL]),
-    projectGroups: toGroups(PROJECT_GROUP_LABELS),
+    groups: [
+      ...USER_SCOPES.flatMap((scope) => toGroup(scope, groupLabel(scope))),
+      ...toGroup(OTHER_SCOPE, "Other"),
+    ],
+    projectGroups: PROJECT_SCOPES.flatMap((scope) => toGroup(scope, groupLabel(scope))),
   };
 }
 
@@ -185,14 +217,6 @@ export function unreportedProviderNames(
   ];
 }
 
-const STATUS_TEXT: Record<ClaudeMcpServerReport["status"], string> = {
-  connected: "Connected",
-  pending: "Connecting...",
-  failed: "Failed",
-  "needs-auth": "Needs sign-in",
-  disabled: "Disabled",
-};
-
 const TRANSPORT_LABELS: Record<ClaudeMcpTransportKind, string> = {
   stdio: "stdio",
   http: "HTTP",
@@ -200,21 +224,6 @@ const TRANSPORT_LABELS: Record<ClaudeMcpTransportKind, string> = {
   claudeai: "claude.ai",
   sdk: "SDK",
 };
-
-const SCOPE_LABELS: Record<string, string> = {
-  user: "User",
-  project: "Project",
-  local: "Local",
-  dynamic: "Dynamic",
-  agent: "Agent",
-  claudeai: "claude.ai",
-  managed: "Managed",
-  enterprise: "Enterprise",
-  plugin: "Plugin",
-  sdk: "SDK",
-};
-
-const scopeLabel = (scope: string) => SCOPE_LABELS[scope] ?? scope;
 
 function locationOf(server: ClaudeMcpServerDetail): string | undefined {
   if (server.scope === undefined) {
@@ -324,7 +333,7 @@ export function claudeMcpDetailView(input: {
     ...(server.transport === undefined ? {} : { transport: TRANSPORT_LABELS[server.transport] }),
     ...(target === undefined ? {} : { target }),
     ...(location === undefined ? {} : { location }),
-    toolCountText: `${server.toolCount} ${server.toolCount === 1 ? "tool" : "tools"}`,
+    toolCountText: toolCountText(server.toolCount),
     ...(guidance === undefined ? {} : { guidance }),
     tools: server.tools.map(toToolView),
     ...(server.tools.length > 0 ? {} : { noToolsText: noToolsText(server.status) }),
