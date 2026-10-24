@@ -42,6 +42,10 @@ vi.mock(import("../../state/server"), async (original) => {
         ...actual.serverEnvironment.setClaudeMcpServerEnabled,
         permissionAtom: () => Atom.make(true),
       },
+      removeClaudeMcpServer: {
+        ...actual.serverEnvironment.removeClaudeMcpServer,
+        permissionAtom: () => Atom.make(true),
+      },
     },
   };
 });
@@ -229,6 +233,41 @@ describe("ClaudeMcpSection", () => {
       environmentId,
       input: { cwd: "/home/me", fresh: true },
     });
+  });
+
+  it("asks to confirm Remove before removing, then asks Claude again", async () => {
+    probe.view = {
+      data: { servers: [{ name: "docs", status: "connected", toolCount: 2, scope: "user" }] },
+      error: null,
+      isPending: false,
+    };
+    probe.detail = {
+      server: { name: "docs", status: "connected", toolCount: 2, scope: "user", tools: [] },
+      checkedAt: "2026-10-24T10:00:00.000Z",
+    };
+    probe.fresh.mockClear();
+    probe.command.mockReset();
+    probe.command.mockResolvedValue(AsyncResult.success(undefined));
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: /docs/ }));
+    clickInDialog(screen.getByRole("dialog").getByRole("button", { name: "Remove" }));
+    const confirm = screen.getByRole("alertdialog");
+    await expect.element(confirm.getByText("Remove docs?")).toBeVisible();
+    expect(probe.command).not.toHaveBeenCalled();
+
+    clickInDialog(confirm.getByRole("button", { name: "Remove server" }));
+    expect(probe.command).toHaveBeenCalledWith({
+      environmentId,
+      input: { name: "docs", scope: "user", cwd: "/home/me" },
+    });
+    await probe.command.mock.results[0]?.value;
+    await vi.waitFor(() =>
+      expect(probe.fresh).toHaveBeenCalledWith({
+        environmentId,
+        input: { cwd: "/home/me", fresh: true },
+      }),
+    );
   });
 
   it("reconnects from the dialog by asking Claude again", async () => {

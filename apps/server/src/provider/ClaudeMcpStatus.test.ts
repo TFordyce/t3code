@@ -7,7 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 
 import * as ServerSettings from "../serverSettings.ts";
@@ -40,16 +40,28 @@ const makeFakeQuery = (mcpServerStatus: FakeStatus) => {
   return { query, started, aborted, toggles, statusCalls: () => statusCalls };
 };
 
+/** A faked Claude CLI runner: records each run and answers with `result`. */
+const makeFakeCli = (result: Partial<ClaudeMcpStatus.ClaudeMcpCliResult> = {}) => {
+  const runs: Array<ClaudeMcpStatus.ClaudeMcpCliInput> = [];
+  const runCli: ClaudeMcpStatus.ClaudeMcpCli = (input) =>
+    Effect.sync(() => {
+      runs.push(input);
+      return { code: 0, stdout: "", stderr: "", ...result };
+    });
+  return { runCli, runs };
+};
+
 const layerFor = (
   query: ClaudeMcpStatus.ClaudeMcpQuery,
   settings: Parameters<typeof ServerSettings.layerTest>[0] = {},
+  runCli: ClaudeMcpStatus.ClaudeMcpCli = makeFakeCli().runCli,
 ) => {
   const base = Layer.mergeAll(
     ServerSettings.layerTest(settings),
     McpProviderSessions.layer,
     NodeServices.layer,
   );
-  return ClaudeMcpStatus.makeLayer({ query }).pipe(Layer.provideMerge(base));
+  return ClaudeMcpStatus.makeLayer({ query, runCli }).pipe(Layer.provideMerge(base));
 };
 
 const connected = (name: string, extra: Partial<McpServerStatus> = {}): McpServerStatus => ({
@@ -494,4 +506,80 @@ it.effect("concurrent fresh requests for one directory share a single probe", ()
     yield* Fiber.join(all);
     assert.equal(fake.started.length, 1);
   }).pipe(Effect.provide(layerFor(fake.query)));
+});
+
+it.effect("remove runs claude mcp remove at the reported scope in the probed directory", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  const cli = makeFakeCli();
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    yield* service.removeServer({ name: "docs", scope: "local", cwd: "/work/app" });
+    yield* service.removeServer({ name: "my server", scope: "user", cwd: "/work/app" });
+    assert.deepStrictEqual(
+      cli.runs.map((run) => [run.executable, run.args, run.cwd]),
+      [
+        ["/opt/claude", ["mcp", "remove", "docs", "-s", "local"], "/work/app"],
+        ["/opt/claude", ["mcp", "remove", "my server", "-s", "user"], "/work/app"],
+      ],
+    );
+  }).pipe(
+    Effect.provide(
+      layerFor(
+        fake.query,
+        {
+          providerInstances: {
+            [ProviderInstanceId.make("claudeAgent")]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              config: { binaryPath: "/opt/claude" },
+            },
+          },
+        },
+        cli.runCli,
+      ),
+    ),
+  );
+});
+
+it.effect("remove runs Claude with the probe's Claude home", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  const cli = makeFakeCli();
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    yield* service.probe({ cwd: "/work/app" });
+    yield* service.removeServer({ name: "docs", scope: "user", cwd: "/work/app" });
+    const probeHome = fake.started[0]?.env?.CLAUDE_CONFIG_DIR;
+    assert.isDefined(probeHome);
+    assert.equal(cli.runs[0]?.env.CLAUDE_CONFIG_DIR, probeHome);
+  }).pipe(
+    Effect.provide(
+      layerFor(
+        fake.query,
+        {
+          providerInstances: {
+            [ProviderInstanceId.make("claudeAgent")]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              config: { homePath: "/profiles/work-claude" },
+            },
+          },
+        },
+        cli.runCli,
+      ),
+    ),
+  );
+});
+
+it.effect("remove passes Claude's own error text back when it refuses", () => {
+  const fake = makeFakeQuery(() => Promise.resolve([]));
+  const cli = makeFakeCli({
+    code: 1,
+    stderr: 'No user-scoped MCP server found with name: "docs"\n',
+  });
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const error = yield* service
+      .removeServer({ name: "docs", scope: "user", cwd: "/work/app" })
+      .pipe(Effect.flip);
+    assert.equal(error.reason, "failed");
+    assert.equal(error.message, 'No user-scoped MCP server found with name: "docs"');
+  }).pipe(Effect.provide(layerFor(fake.query, {}, cli.runCli)));
 });

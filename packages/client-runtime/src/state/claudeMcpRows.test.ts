@@ -221,6 +221,7 @@ describe("claudeMcpDetailView", () => {
       tools: [],
       noToolsText: "This server offers no tools.",
       actions: ["reconnect", "disable"],
+      removeScope: "user",
     });
   });
 
@@ -301,6 +302,28 @@ describe("claudeMcpDetailView actions", () => {
 
   it("offers only Enable for a disabled server", () => {
     expect(actionsFor("disabled")).toEqual(["enable"]);
+  });
+});
+
+describe("claudeMcpDetailView remove", () => {
+  const removeScopeFor = (scope: string | undefined) => {
+    const view = claudeMcpDetailView({
+      data: detailResult(detail({ scope })),
+      isPending: false,
+      error: null,
+    });
+    return view.kind === "server" ? view.removeScope : "not a server";
+  };
+
+  it("offers Remove at the server's own scope for user and local servers", () => {
+    expect(removeScopeFor("user")).toBe("user");
+    expect(removeScopeFor("local")).toBe("local");
+  });
+
+  it("offers no Remove for servers Claude's CLI can't remove", () => {
+    for (const scope of ["claudeai", "plugin", "managed", "enterprise", "project", undefined]) {
+      expect(removeScopeFor(scope)).toBeUndefined();
+    }
   });
 });
 
