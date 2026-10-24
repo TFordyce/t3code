@@ -2418,6 +2418,8 @@ export const layerWsRpc = (
           claudeMcpStatus.setServerEnabled(input).pipe(Effect.as({})),
         [WS_METHODS.serverReconnectClaudeMcpServer]: (input) =>
           claudeMcpStatus.reconnectServer(input).pipe(Effect.as({})),
+        [WS_METHODS.serverRemoveClaudeMcpServer]: (input) =>
+          claudeMcpStatus.removeServer(input).pipe(Effect.as({})),
         [WS_METHODS.serverStartMcpServerSignIn]: (target) => mcpSignIn.start(target),
         [WS_METHODS.serverCompleteMcpServerSignIn]: ({ callbackUrl, ...target }) =>
           mcpSignIn.complete(target, callbackUrl).pipe(Effect.as({})),

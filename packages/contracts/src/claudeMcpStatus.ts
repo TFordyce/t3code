@@ -154,3 +154,40 @@ export class ClaudeMcpReconnectError extends Schema.TaggedError<ClaudeMcpReconne
     }
   }
 }
+
+/** The Claude config scopes T3 removes servers from; claude.ai, plugin, managed and project servers stay Claude's to manage. */
+export const ClaudeMcpRemovableScope = Schema.Literals(["user", "local"]);
+export type ClaudeMcpRemovableScope = typeof ClaudeMcpRemovableScope.Type;
+
+/**
+ * Removes one server from Claude's own config with `claude mcp remove`, at the
+ * scope the probe reported. `cwd` is the directory it was probed in, which
+ * picks the project a local server belongs to.
+ */
+export const RemoveClaudeMcpServerInput = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  scope: ClaudeMcpRemovableScope,
+  cwd: ClaudeMcpStatusInput.fields.cwd,
+});
+export type RemoveClaudeMcpServerInput = typeof RemoveClaudeMcpServerInput.Type;
+
+export class ClaudeMcpRemoveError extends Schema.TaggedError<ClaudeMcpRemoveError>()(
+  "ClaudeMcpRemoveError",
+  {
+    /** `failed`: Claude ran and refused, with its own words in `detail`. */
+    reason: Schema.Literals(["settings", "startFailed", "failed"]),
+    detail: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "settings":
+        return "Could not read the Claude provider settings.";
+      case "startFailed":
+        return "Could not run Claude to remove the MCP server.";
+      case "failed":
+        return this.detail ?? "Claude could not remove the MCP server.";
+    }
+  }
+}

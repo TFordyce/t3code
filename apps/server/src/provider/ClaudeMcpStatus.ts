@@ -19,6 +19,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   ClaudeMcpReconnectError,
+  ClaudeMcpRemoveError,
   ClaudeMcpStatusError,
   ClaudeMcpToggleError,
   ClaudeSettings,
@@ -31,12 +32,15 @@ import {
   type ClaudeMcpStatusResult,
   type ProjectId,
   type ReconnectClaudeMcpServerInput,
+  type RemoveClaudeMcpServerInput,
   ProviderDriverKind,
   type ServerSettings as ServerSettingsValue,
   type SetClaudeMcpServerEnabledInput,
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -49,6 +53,7 @@ import * as MutableHashSet from "effect/MutableHashSet";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveClaudeSdkExecutablePath } from "./Drivers/ClaudeExecutable.ts";
@@ -76,6 +81,43 @@ class ProbeKey extends Data.Class<{
 
 /** The SDK `query` entry point, injectable so tests can fake the Claude process. */
 export type ClaudeMcpQuery = typeof claudeQuery;
+
+/** One run of the Claude CLI: `executable` is the configured Claude binary, `env` the probe's Claude environment. */
+export interface ClaudeMcpCliInput {
+  readonly executable: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+export interface ClaudeMcpCliResult {
+  readonly code: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/** Runs the Claude CLI and collects its output, injectable so tests can fake it. */
+export type ClaudeMcpCli = (input: ClaudeMcpCliInput) => Effect.Effect<ClaudeMcpCliResult, Error>;
+
+/**
+ * Runs Claude without a shell, so names and JSON reach it verbatim: an npm
+ * `claude.cmd` shim is bypassed for the executable behind it.
+ */
+const makeClaudeCli = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]): ClaudeMcpCli =>
+  Effect.fnUntraced(function* (input) {
+    const spawn = yield* resolveSpawnCommand(input.executable, input.args, {
+      env: input.env,
+      bypassNpmShim: true,
+    });
+    const command = ChildProcess.make(spawn.command, spawn.args, {
+      env: input.env,
+      shell: spawn.shell,
+      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+    });
+    return yield* spawnAndCollect(input.executable, command).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+  });
 
 /**
  * Unlike the capabilities probe this keeps project and local MCP sources and
@@ -244,10 +286,22 @@ export class ClaudeMcpStatus extends Context.Service<
     readonly reconnectServer: (
       input: ReconnectClaudeMcpServerInput,
     ) => Effect.Effect<void, ClaudeMcpReconnectError>;
+    /**
+     * Removes a user or local server from Claude's own config with `claude mcp
+     * remove`, in the probe's Claude environment and directory. A refusal
+     * carries Claude's own words; the caller re-probes afterwards. Running
+     * sessions keep the server until they restart.
+     */
+    readonly removeServer: (
+      input: RemoveClaudeMcpServerInput,
+    ) => Effect.Effect<void, ClaudeMcpRemoveError>;
   }
 >()("t3/provider/ClaudeMcpStatus") {}
 
-const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery) {
+const make = Effect.fn("ClaudeMcpStatus.make")(function* (
+  query: ClaudeMcpQuery,
+  runCli: ClaudeMcpCli,
+) {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const liveSessions = yield* McpProviderSessions.McpProviderSessions;
   const path = yield* Path.Path;
@@ -263,13 +317,14 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
     Effect.mapError((cause) => new ClaudeMcpStatusError({ reason: "settings", cause })),
   );
 
+  const claudeEnvironment = (settings: ClaudeSettings) =>
+    makeClaudeEnvironment(settings).pipe(Effect.provideService(Path.Path, path));
+
   const runProbe = Effect.fn("ClaudeMcpStatus.probe")(function* (key: ProbeKey) {
     const { cwd, disabledServers } = key;
     const disabled = new Set(disabledServers);
     const settings = yield* resolveSettings;
-    const environment = yield* makeClaudeEnvironment(settings).pipe(
-      Effect.provideService(Path.Path, path),
-    );
+    const environment = yield* claudeEnvironment(settings);
     const executablePath = yield* resolveClaudeSdkExecutablePath(settings.binaryPath, environment);
     const abort = new AbortController();
     const started = yield* Effect.try({
@@ -400,6 +455,27 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
     if (!reconnected) return yield* new ClaudeMcpReconnectError({ reason: "noSession" });
   });
 
+  const removeServer = Effect.fn("ClaudeMcpStatus.removeServer")(function* (
+    input: RemoveClaudeMcpServerInput,
+  ) {
+    const settings = yield* resolveSettings.pipe(
+      Effect.mapError((error) => new ClaudeMcpRemoveError({ reason: "settings", cause: error })),
+    );
+    const result = yield* runCli({
+      executable: settings.binaryPath,
+      args: ["mcp", "remove", input.name, "-s", input.scope],
+      cwd: input.cwd,
+      env: yield* claudeEnvironment(settings),
+    }).pipe(Effect.mapError((cause) => new ClaudeMcpRemoveError({ reason: "startFailed", cause })));
+    if (result.code !== 0) {
+      const detail = result.stderr.trim() || result.stdout.trim();
+      return yield* new ClaudeMcpRemoveError({
+        reason: "failed",
+        ...(detail.length === 0 ? {} : { detail }),
+      });
+    }
+  });
+
   const cachedProbe = Effect.fnUntraced(function* (input: {
     readonly cwd: string;
     readonly projectId?: ProjectId | undefined;
@@ -432,10 +508,21 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
       ),
     setServerEnabled,
     reconnectServer,
+    removeServer,
   });
 });
 
-export const makeLayer = (options?: { readonly query?: ClaudeMcpQuery }) =>
-  Layer.effect(ClaudeMcpStatus, make(options?.query ?? claudeQuery));
+export const makeLayer = (options?: {
+  readonly query?: ClaudeMcpQuery;
+  readonly runCli?: ClaudeMcpCli;
+}) =>
+  Layer.effect(
+    ClaudeMcpStatus,
+    Effect.gen(function* () {
+      const runCli =
+        options?.runCli ?? makeClaudeCli(yield* ChildProcessSpawner.ChildProcessSpawner);
+      return yield* make(options?.query ?? claudeQuery, runCli);
+    }),
+  );
 
 export const layer = makeLayer();

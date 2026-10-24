@@ -84,7 +84,8 @@ changing your configuration. If the check fails or times out, the page shows the
 
 A server you added in T3 Code appears as one row with both its settings and Claude's live
 status. Servers only Claude knows about are listed under their level with **Disable** or
-**Enable**, but T3 Code can't edit them: change their configuration in Claude Code.
+**Enable**. T3 Code can't edit them, but it can [remove](#remove-a-server-from-claude) user
+and local ones; change anything else in Claude Code.
 
 Click a Claude-only server's name, in Settings or a thread's **MCP** panel, to see what Claude
 reports about it, including why it failed and which tools it offers. Sign-in still happens
@@ -111,6 +112,14 @@ offer it for any server that isn't disabled. In a
 thread's **MCP** panel it reconnects the server in that thread's running session and then
 re-checks the list so you can see whether it recovered. On the settings page it asks Claude
 again from scratch, which starts the server anew.
+
+### Remove a server from Claude
+
+A Claude-only server's details offer **Remove** for servers at the **User** or **Local** level,
+whoever added them. After you confirm, T3 Code asks Claude's own CLI to remove it on the
+environment's machine, so plain `claude` and other Claude hosts stop loading it too. If Claude
+refuses, its message is shown. `claude.ai` connectors, plugin, managed and project servers
+can't be removed here. Running sessions keep the server until they restart.
 
 ### Servers that need sign-in
 
