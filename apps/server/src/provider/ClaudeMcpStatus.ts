@@ -550,6 +550,8 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (
     const output = yield* runCli({
       binaryPath: settings.binaryPath,
       args: ["mcp", "add-json", input.name, encodeServerJson(input.server), "-s", input.scope],
+      // Claude keys a local server to the project it runs in.
+      ...(input.scope === "local" ? { cwd: input.cwd } : {}),
       env: environment,
     }).pipe(
       Effect.mapError(
