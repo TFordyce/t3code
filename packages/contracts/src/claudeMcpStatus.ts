@@ -38,6 +38,8 @@ export const ClaudeMcpStatusInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   /** Whose disabled list applies: the project's override, else the environment's. */
   projectId: Schema.optional(ProjectId),
+  /** Skip the server's cached probe and ask Claude again (Refresh, after a reconnect). */
+  fresh: Schema.optional(Schema.Boolean),
 });
 export type ClaudeMcpStatusInput = typeof ClaudeMcpStatusInput.Type;
 

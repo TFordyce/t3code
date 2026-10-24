@@ -372,3 +372,46 @@ it.effect("reconnect surfaces a refusal from Claude", () => {
     assert.equal(error.reason, "failed");
   }).pipe(Effect.provide(layerFor(fake.query)));
 });
+
+it.effect("a fresh request re-probes its own directory and leaves the others cached", () => {
+  let probes = 0;
+  const fake = makeFakeQuery(() => Promise.resolve([connected(`probe-${++probes}`)]));
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    yield* service.probe({ cwd: "/work/app" });
+    const other = yield* service.probe({ cwd: "/work/other" });
+    assert.equal(fake.started.length, 2);
+
+    const fresh = yield* service.probe({ cwd: "/work/app", fresh: true });
+    assert.equal(fresh.servers[0]?.name, "probe-3");
+    assert.equal(fake.started.length, 3);
+
+    // Later plain reads see the fresh result; the other directory keeps its own.
+    const after = yield* service.probe({ cwd: "/work/app" });
+    assert.deepStrictEqual(after, fresh);
+    assert.deepStrictEqual(yield* service.probe({ cwd: "/work/other" }), other);
+    assert.equal(fake.started.length, 3);
+  }).pipe(Effect.provide(layerFor(fake.query)));
+});
+
+it.effect("concurrent fresh requests for one directory share a single probe", () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const fake = makeFakeQuery(() => {
+    entered.resolve();
+    return release.promise.then(() => [connected("a")]);
+  });
+  return Effect.gen(function* () {
+    const service = yield* ClaudeMcpStatus.ClaudeMcpStatus;
+    const fresh = service.probe({ cwd: "/work/app", fresh: true });
+    const all = yield* Effect.forkChild(
+      Effect.all([fresh, fresh, service.probe({ cwd: "/work/app" })], {
+        concurrency: "unbounded",
+      }),
+    );
+    yield* Effect.promise(() => entered.promise);
+    release.resolve();
+    yield* Fiber.join(all);
+    assert.equal(fake.started.length, 1);
+  }).pipe(Effect.provide(layerFor(fake.query)));
+});

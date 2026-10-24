@@ -42,6 +42,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -144,7 +145,7 @@ export class ClaudeMcpStatus extends Context.Service<
     /**
      * Every MCP server Claude would load in `cwd`, with the disabled list that
      * applies to `projectId` honoured. Cached for five minutes per directory
-     * and list.
+     * and list; `fresh` drops that one entry and asks Claude again.
      */
     readonly probe: (
       input: ClaudeMcpStatusInput,
@@ -249,6 +250,19 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
     timeToLive: (exit) => (Exit.isSuccess(exit) ? CACHE_TTL : Duration.zero),
   });
 
+  // Keys with a fresh probe in flight: a second fresh request joins it rather
+  // than dropping it and starting another Claude process.
+  const freshInFlight = MutableHashSet.empty<ProbeKey>();
+  const probeFresh = (key: ProbeKey) =>
+    Effect.suspend(() => {
+      if (MutableHashSet.has(freshInFlight, key)) return Cache.get(cache, key);
+      MutableHashSet.add(freshInFlight, key);
+      return Cache.invalidate(cache, key).pipe(
+        Effect.andThen(Cache.get(cache, key)),
+        Effect.ensuring(Effect.sync(() => MutableHashSet.remove(freshInFlight, key))),
+      );
+    });
+
   const setServerEnabled = Effect.fn("ClaudeMcpStatus.setServerEnabled")(
     function* (input: SetClaudeMcpServerEnabledInput) {
       const before = yield* settingsService.getSettings;
@@ -307,7 +321,7 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
   });
 
   return ClaudeMcpStatus.of({
-    probe: Effect.fnUntraced(function* ({ cwd, projectId }) {
+    probe: Effect.fnUntraced(function* ({ cwd, projectId, fresh }) {
       const settings = yield* settingsService.getSettings.pipe(
         Effect.mapError((cause) => new ClaudeMcpStatusError({ reason: "settings", cause })),
       );
@@ -315,7 +329,7 @@ const make = Effect.fn("ClaudeMcpStatus.make")(function* (query: ClaudeMcpQuery)
         cwd,
         disabledServers: [...disabledServersFor(settings, projectId)],
       });
-      return yield* Cache.get(cache, key);
+      return yield* fresh === true ? probeFresh(key) : Cache.get(cache, key);
     }),
     setServerEnabled,
     reconnectServer,
