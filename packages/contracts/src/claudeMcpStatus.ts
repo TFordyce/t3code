@@ -189,7 +189,7 @@ export type RemoveClaudeMcpServerInput = typeof RemoveClaudeMcpServerInput.Type;
  * Names Claude's CLI takes for a server, and that can't be misread as a flag:
  * letters, digits, `-` and `_`, starting with a letter or digit.
  */
-export const CLAUDE_MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const CLAUDE_MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 /**
  * Why `name` can't be added to Claude's own config, or undefined when it can.
