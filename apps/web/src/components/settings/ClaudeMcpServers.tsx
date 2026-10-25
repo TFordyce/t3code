@@ -13,6 +13,7 @@ import {
   type ClaudeMcpGroup,
   type ClaudeMcpRow,
 } from "@t3tools/client-runtime/state/claude-mcp-rows";
+import { PlusIcon } from "lucide-react";
 import { AsyncResult } from "effect/reactivity";
 import { useState } from "react";
 
@@ -20,6 +21,7 @@ import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
+import { ClaudeMcpAddForm, ClaudeMcpAddedNotice, useClaudeMcpAdd } from "./ClaudeMcpAddForm";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { ClaudeMcpReconnectButton } from "./ClaudeMcpReconnectButton";
@@ -42,6 +44,8 @@ const hasClaudeProvider = (providers: ReadonlyArray<ServerProvider>) =>
  * Claude is started in; null (or no Claude provider) skips the probe.
  * `refresh` asks Claude again past the server's probe cache, then re-reads
  * the list, which that fresh probe has just cached. `isPending` covers both.
+ * `reload` only re-reads the list, for after an add or remove: the server
+ * re-probes after those itself.
  */
 export function useClaudeMcpStatus(input: {
   readonly environmentId: EnvironmentId;
@@ -76,7 +80,14 @@ export function useClaudeMcpStatus(input: {
   };
   const servers = query.data?.servers;
   const view = servers === undefined ? null : claudeMcpView({ servers, t3Names });
-  return { probes, view, isPending: query.isPending || refreshing, error: query.error, refresh };
+  return {
+    probes,
+    view,
+    isPending: query.isPending || refreshing,
+    error: query.error,
+    refresh,
+    reload: query.refresh,
+  };
 }
 
 function Tone({ row }: { readonly row: ClaudeMcpRow }) {
@@ -114,8 +125,9 @@ export function ClaudeLiveStatus(props: {
  * Claude-only servers grouped by scope, each with its Enable/Disable control
  * and, when failed, Reconnect. `onReprobe` asks Claude again; it runs after
  * a reconnect or toggle, and is Reconnect itself without a `threadId`; pass
- * `probing` while it runs. With `cwd`, the directory the list was probed in,
- * clicking a row opens its detail dialog.
+ * `probing` while it runs. `onChanged` re-reads the list after a remove. With
+ * `cwd`, the directory the list was probed in, clicking a row opens its detail
+ * dialog.
  */
 export function ClaudeMcpGroups(props: {
   readonly environmentId: EnvironmentId;
@@ -123,6 +135,7 @@ export function ClaudeMcpGroups(props: {
   readonly projectId?: ProjectId | undefined;
   readonly threadId?: ThreadId | undefined;
   readonly onReprobe?: (() => void) | undefined;
+  readonly onChanged?: (() => void) | undefined;
   readonly probing?: boolean | undefined;
   readonly groups: ReadonlyArray<ClaudeMcpGroup>;
 }) {
@@ -137,6 +150,7 @@ export function ClaudeMcpGroups(props: {
           projectId={props.projectId}
           threadId={props.threadId}
           onReprobe={props.onReprobe}
+          onChanged={props.onChanged}
           probing={props.probing}
           name={openName}
           onClose={() => setOpenName(null)}
@@ -213,24 +227,60 @@ export function ClaudeMcpGroups(props: {
 export function ClaudeMcpSection(props: {
   readonly environmentId: EnvironmentId;
   readonly cwd: string | null;
+  /** A selected project: `cwd` is its root, Local scope is offered, and its project servers show. */
+  readonly projectId?: ProjectId | undefined;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly t3Names: ReadonlyArray<string>;
 }) {
-  const { probes, view, isPending, error, refresh } = useClaudeMcpStatus(props);
+  const { probes, view, isPending, error, refresh, reload } = useClaudeMcpStatus(props);
+  const add = useClaudeMcpAdd(props.environmentId, reload);
   const unreported = unreportedProviderNames(props.providers);
   if (!probes && unreported.length === 0) return null;
+  const { cwd } = props;
+  const groups =
+    view === null
+      ? []
+      : props.projectId === undefined
+        ? view.groups
+        : [...view.projectGroups, ...view.groups];
 
   return (
     <SettingsSection
       title="Claude's servers"
       headerAction={
         probes ? (
-          <Button size="xs" variant="outline" disabled={isPending} onClick={refresh}>
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            {add.canAdd && cwd !== null ? (
+              <Button size="xs" variant="outline" disabled={add.adding} onClick={add.open}>
+                <PlusIcon aria-hidden />
+                Add server
+              </Button>
+            ) : null}
+            <Button size="xs" variant="outline" disabled={isPending} onClick={refresh}>
+              Refresh
+            </Button>
+          </div>
         ) : null
       }
     >
+      {add.adding && cwd !== null ? (
+        <div className="px-3 py-3 sm:px-4">
+          <ClaudeMcpAddForm
+            environmentId={props.environmentId}
+            cwd={cwd}
+            projectId={props.projectId}
+            scopes={props.projectId === undefined ? ["user"] : ["local", "user"]}
+            t3Names={props.t3Names}
+            onCancel={add.cancel}
+            onAdded={add.finish}
+          />
+        </div>
+      ) : null}
+      {add.added === null ? null : (
+        <div className="px-3 py-3 sm:px-4">
+          <ClaudeMcpAddedNotice name={add.added} onDismiss={add.dismiss} />
+        </div>
+      )}
       {probes && view === null && isPending ? (
         <div className="flex items-center gap-2 px-3 py-3 text-sm sm:px-4">
           <Spinner className="size-3.5" />
@@ -253,14 +303,18 @@ export function ClaudeMcpSection(props: {
         <ClaudeMcpGroups
           environmentId={props.environmentId}
           cwd={props.cwd ?? undefined}
-          groups={view.groups}
+          projectId={props.projectId}
+          groups={groups}
           onReprobe={refresh}
+          onChanged={reload}
           probing={isPending}
         />
       ) : null}
-      {view !== null && view.groups.length === 0 ? (
+      {view !== null && groups.length === 0 ? (
         <p className="px-3 py-3 text-sm text-muted-foreground sm:px-4">
-          Claude has no user or org servers loaded.
+          {props.projectId === undefined
+            ? "Claude has no user or org servers loaded."
+            : "Claude has no servers loaded for this project."}
         </p>
       ) : null}
       {unreported.length > 0 ? (

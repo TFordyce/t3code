@@ -84,15 +84,17 @@ changing your configuration. If the check fails or times out, the page shows the
 
 A server you added in T3 Code appears as one row with both its settings and Claude's live
 status. Servers only Claude knows about are listed under their level with **Disable** or
-**Enable**, but T3 Code can't edit them: change their configuration in Claude Code.
+**Enable**. T3 Code can [add](#add-a-server-to-claude) servers to Claude and
+[remove](#remove-a-server-from-claude) user and local ones, but can't edit them: to change a
+server, remove it and add it again.
 
 Click a Claude-only server's name, in Settings or a thread's **MCP** panel, to see what Claude
 reports about it, including why it failed and which tools it offers. Sign-in still happens
 outside T3 Code: the details only point you to claude.ai or `/mcp` in Claude Code.
 
-This page shows user-level and organization-level servers. Servers tied to a project, such as
-those from the project's `.mcp.json`, appear in the **MCP** panel of a thread in that project
-instead, because they only apply there. Other providers that support MCP servers don't report
+For the whole environment, this page shows user-level and organization-level servers. Select a
+project to also see the servers tied to it, such as those from its `.mcp.json`; a thread's
+**MCP** panel in that project shows them too. Other providers that support MCP servers don't report
 what they loaded, so the page says so rather than showing a list.
 
 ### Turn a server off and on
@@ -112,6 +114,34 @@ thread's **MCP** panel it reconnects the server in that thread's running session
 re-checks the list so you can see whether it recovered. On the settings page it asks Claude
 again from scratch, which starts the server anew.
 
+### Add a server to Claude
+
+Choose **Add server** under **Claude's servers**, or **Add to Claude** in a thread's **MCP**
+panel, and give a name and either a command (stdio) or a URL (HTTP), with any environment
+variables or headers. T3 Code asks Claude's own CLI to save it on the environment's machine.
+If Claude refuses, for example because the name already exists, its message is shown.
+
+- **User** saves the server for every project. It's the only choice with no project selected.
+- **Local** saves it for one project, private to you. It's the default with a project
+  selected, and the only choice from a thread's **MCP** panel.
+
+Claude stores environment variables and headers as plain text in `~/.claude.json`. There's
+no way to mark them sensitive, as there is for T3 Code's own servers.
+
+The difference from T3 Code's own [Add server](#add-a-server): those servers reach every
+provider in T3 Code, but only inside T3 Code. A server added to Claude works only with
+Claude, and also in plain `claude`, VS Code and other Claude Code hosts. A name used by one of
+T3 Code's servers can't be reused for Claude's. Running sessions don't get the server until
+they restart.
+
+### Remove a server from Claude
+
+A Claude-only server's details offer **Remove** for servers at the **User** or **Local** level,
+whoever added them. After you confirm, T3 Code asks Claude's own CLI to remove it on the
+environment's machine, so plain `claude` and other Claude hosts stop loading it too. If Claude
+refuses, its message is shown. `claude.ai` connectors, plugin, managed and project servers
+can't be removed here. Running sessions keep the server until they restart.
+
 ### Servers that need sign-in
 
 A Claude server that shows **Needs sign-in** can't be signed in from T3 Code. For a
@@ -123,8 +153,9 @@ added in T3 Code keep their [sign-in](#sign-in-to-a-server) button.
 ## When changes apply
 
 Changes to servers you add in T3 Code apply to new sessions. A session that is already running
-keeps the servers it started with. The page says so after each save. Disabling or enabling a
-Claude server is the exception and applies to running sessions immediately.
+keeps the servers it started with. The page says so after each save. Adding or removing a
+Claude server also applies to new sessions only. Disabling or enabling a Claude server is the
+exception and applies to running sessions immediately.
 
 OpenCode is the exception. It shares one server per directory, so OpenCode sessions in the
 project pick up changes right away.

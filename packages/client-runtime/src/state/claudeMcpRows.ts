@@ -1,5 +1,6 @@
 import {
   BUILT_IN_MCP_SERVER_NAME,
+  ClaudeMcpScope,
   type ClaudeMcpServerDetail,
   type ClaudeMcpServerDetailResult,
   type ClaudeMcpServerReport,
@@ -7,6 +8,7 @@ import {
   type ClaudeMcpTransportKind,
   type ProjectId,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 
 /**
  * The list probe's input for a directory, naming the project only when there is
@@ -247,6 +249,8 @@ const actionsFor = (
 ): ReadonlyArray<ClaudeMcpDetailAction> =>
   status === "disabled" ? ["enable"] : ["reconnect", "disable"];
 
+const isClaudeMcpScope = Schema.is(ClaudeMcpScope);
+
 /**
  * Where a server's sign-in lives. Claude owns it, so T3 only points there:
  * claude.ai for connectors, `/mcp` for other remote servers. stdio and SDK
@@ -294,6 +298,11 @@ export type ClaudeMcpDetailView =
       readonly noToolsText?: string;
       /** In display order; the caller hides them without the providers-manage grant. */
       readonly actions: ReadonlyArray<ClaudeMcpDetailAction>;
+      /**
+       * Set for user and local servers: the scope `claude mcp remove` takes. The
+       * caller offers Remove only with it, and the providers-manage grant.
+       */
+      readonly removeScope?: ClaudeMcpScope;
     };
 
 /**
@@ -338,6 +347,7 @@ export function claudeMcpDetailView(input: {
     tools: server.tools.map(toToolView),
     ...(server.tools.length > 0 ? {} : { noToolsText: noToolsText(server.status) }),
     actions: actionsFor(server.status),
+    ...(isClaudeMcpScope(server.scope) ? { removeScope: server.scope } : {}),
   };
 }
 

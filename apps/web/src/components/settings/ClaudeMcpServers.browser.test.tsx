@@ -1,5 +1,7 @@
 import {
+  ClaudeMcpAddError,
   EnvironmentId,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -7,6 +9,7 @@ import {
 import { userEvent } from "vite-plus/test/browser";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 
 import { render } from "../../../test/render";
@@ -40,6 +43,14 @@ vi.mock(import("../../state/server"), async (original) => {
       },
       setClaudeMcpServerEnabled: {
         ...actual.serverEnvironment.setClaudeMcpServerEnabled,
+        permissionAtom: () => Atom.make(true),
+      },
+      removeClaudeMcpServer: {
+        ...actual.serverEnvironment.removeClaudeMcpServer,
+        permissionAtom: () => Atom.make(true),
+      },
+      addClaudeMcpServer: {
+        ...actual.serverEnvironment.addClaudeMcpServer,
         permissionAtom: () => Atom.make(true),
       },
     },
@@ -231,6 +242,38 @@ describe("ClaudeMcpSection", () => {
     });
   });
 
+  it("asks to confirm Remove before removing, then re-reads the list the server re-probed", async () => {
+    probe.view = {
+      data: { servers: [{ name: "docs", status: "connected", toolCount: 2, scope: "user" }] },
+      error: null,
+      isPending: false,
+    };
+    probe.detail = {
+      server: { name: "docs", status: "connected", toolCount: 2, scope: "user", tools: [] },
+      checkedAt: "2026-10-24T10:00:00.000Z",
+    };
+    probe.fresh.mockClear();
+    probe.refresh.mockClear();
+    probe.command.mockReset();
+    probe.command.mockResolvedValue(AsyncResult.success(undefined));
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: /docs/ }));
+    clickInDialog(screen.getByRole("dialog").getByRole("button", { name: "Remove" }));
+    const confirm = screen.getByRole("alertdialog");
+    await expect.element(confirm.getByText("Remove docs?")).toBeVisible();
+    expect(probe.command).not.toHaveBeenCalled();
+
+    clickInDialog(confirm.getByRole("button", { name: "Remove server" }));
+    expect(probe.command).toHaveBeenCalledWith({
+      environmentId,
+      input: { name: "docs", scope: "user", cwd: "/home/me" },
+    });
+    await probe.command.mock.results[0]?.value;
+    await vi.waitFor(() => expect(probe.refresh).toHaveBeenCalled());
+    expect(probe.fresh).not.toHaveBeenCalled();
+  });
+
   it("reconnects from the dialog by asking Claude again", async () => {
     probe.view = {
       data: { servers: [{ name: "docs", status: "failed", toolCount: 0, scope: "user" }] },
@@ -279,5 +322,183 @@ describe("ClaudeMcpSection", () => {
     settle(AsyncResult.success(undefined));
     await expect.element(dialog.getByRole("button", { name: "Reconnect" })).toBeEnabled();
     await expect.element(dialog.getByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("adds a stdio server to Claude from the form, then re-reads the list", async () => {
+    probe.view = { data: { servers: [] }, error: null, isPending: false };
+    probe.command.mockReset();
+    probe.command.mockResolvedValue(AsyncResult.success({}));
+    probe.refresh.mockClear();
+    probe.fresh.mockClear();
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await expect
+      .element(
+        screen.getByText(
+          "Claude saves environment variables and headers as plain text in ~/.claude.json.",
+        ),
+      )
+      .toBeVisible();
+    await userEvent.fill(screen.getByLabelText("Server name"), "acme");
+    await userEvent.fill(screen.getByLabelText("Command"), "npx");
+    await userEvent.fill(screen.getByLabelText("Arguments"), "-y\n@acme/mcp\n");
+    await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    await userEvent.fill(screen.getByLabelText("Variable name"), "API_KEY");
+    await userEvent.fill(screen.getByLabelText("Variable value"), "secret");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    expect(probe.command).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        cwd: "/home/me",
+        name: "acme",
+        scope: "user",
+        server: {
+          type: "stdio",
+          command: "npx",
+          args: ["-y", "@acme/mcp"],
+          env: { API_KEY: "secret" },
+        },
+      },
+    });
+    await expect
+      .element(screen.getByText("Added acme. It applies to new Claude sessions."))
+      .toBeVisible();
+    // The server already re-probed fresh, so the list is only re-read.
+    expect(probe.refresh).toHaveBeenCalledOnce();
+    expect(probe.fresh).not.toHaveBeenCalled();
+  });
+
+  it("adds an HTTP server to Claude with its URL and headers", async () => {
+    probe.view = { data: { servers: [] }, error: null, isPending: false };
+    probe.command.mockReset();
+    probe.command.mockResolvedValue(AsyncResult.success({}));
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await userEvent.click(screen.getByRole("button", { name: "HTTP" }));
+    await expect
+      .element(
+        screen.getByText(
+          "Claude saves environment variables and headers as plain text in ~/.claude.json.",
+        ),
+      )
+      .toBeVisible();
+    await userEvent.fill(screen.getByLabelText("Server name"), "linear");
+    await userEvent.fill(screen.getByLabelText("URL"), "https://mcp.linear.app/mcp");
+    await userEvent.click(screen.getByRole("button", { name: "Add header" }));
+    await userEvent.fill(screen.getByLabelText("Header name"), "Authorization");
+    await userEvent.fill(screen.getByLabelText("Header value"), "Bearer token");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    expect(probe.command).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        cwd: "/home/me",
+        name: "linear",
+        scope: "user",
+        server: {
+          type: "http",
+          url: "https://mcp.linear.app/mcp",
+          headers: { Authorization: "Bearer token" },
+        },
+      },
+    });
+  });
+
+  it("refuses an HTTP server without an http(s) URL", async () => {
+    probe.view = { data: { servers: [] }, error: null, isPending: false };
+    probe.command.mockReset();
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await userEvent.click(screen.getByRole("button", { name: "HTTP" }));
+    await userEvent.fill(screen.getByLabelText("Server name"), "linear");
+    await userEvent.fill(screen.getByLabelText("URL"), "mcp.linear.app");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    await expect.element(screen.getByText("Enter the server's http(s) URL.")).toBeVisible();
+    expect(probe.command).not.toHaveBeenCalled();
+  });
+
+  it("shows Claude's error in the form and keeps it open", async () => {
+    probe.view = { data: { servers: [] }, error: null, isPending: false };
+    probe.command.mockReset();
+    probe.command.mockResolvedValue(
+      AsyncResult.failure(
+        Cause.fail(
+          new ClaudeMcpAddError({
+            reason: "rejected",
+            detail: "MCP server acme already exists in user config",
+          }),
+        ),
+      ),
+    );
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await userEvent.fill(screen.getByLabelText("Server name"), "acme");
+    await userEvent.fill(screen.getByLabelText("Command"), "npx");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    await expect
+      .element(screen.getByText("MCP server acme already exists in user config"))
+      .toBeVisible();
+    await expect.element(screen.getByLabelText("Server name")).toHaveValue("acme");
+  });
+  it("with a project, defaults the add to Local scope in the project's root and offers User", async () => {
+    probe.view = { data: { servers: [] }, error: null, isPending: false };
+    probe.command.mockReset();
+    probe.command.mockResolvedValue(AsyncResult.success({}));
+    const projectId = ProjectId.make("project-1");
+    await using screen = await render(
+      <ClaudeMcpSection
+        environmentId={environmentId}
+        cwd="/work/repo"
+        projectId={projectId}
+        providers={[provider("claudeAgent", "Claude")]}
+        t3Names={[]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await expect
+      .element(screen.getByRole("button", { name: "Local" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await userEvent.fill(screen.getByLabelText("Server name"), "acme");
+    await userEvent.fill(screen.getByLabelText("Command"), "npx");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    expect(probe.command).toHaveBeenLastCalledWith({
+      environmentId,
+      input: {
+        cwd: "/work/repo",
+        projectId,
+        name: "acme",
+        scope: "local",
+        server: { type: "stdio", command: "npx", args: [], env: {} },
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await userEvent.click(screen.getByRole("button", { name: "User" }));
+    await userEvent.fill(screen.getByLabelText("Server name"), "acme");
+    await userEvent.fill(screen.getByLabelText("Command"), "npx");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    expect(probe.command).toHaveBeenLastCalledWith({
+      environmentId,
+      input: expect.objectContaining({ projectId, scope: "user" }),
+    });
+  });
+
+  it("without a project, offers only User scope", async () => {
+    probe.view = { data: { servers: [] }, error: null, isPending: false };
+    await using screen = await renderSection();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add server" }));
+    await expect.element(screen.getByLabelText("Server name")).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Local" })).not.toBeInTheDocument();
   });
 });

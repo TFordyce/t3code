@@ -3,7 +3,10 @@
  * row. The detail is read from the server's cached probe (probing on a miss)
  * and follows the list in place when it is refreshed, so Reconnect and
  * Enable/Disable (both followed by `onReprobe`, a fresh probe) update the open
- * dialog. While any probe runs the dialog shows a spinner and holds its actions.
+ * dialog. Remove, for user and local servers, re-probes on the server and is
+ * followed by `onChanged`, a re-read, so the dialog turns to "no longer
+ * reports". While any probe runs the dialog shows a spinner and holds its
+ * actions.
  *
  * @module ClaudeMcpServerDialog
  */
@@ -35,6 +38,7 @@ import {
 } from "../ui/dialog";
 import { Spinner } from "../ui/spinner";
 import { ClaudeMcpReconnectButton } from "./ClaudeMcpReconnectButton";
+import { ClaudeMcpRemoveButton } from "./ClaudeMcpRemoveButton";
 import { ClaudeMcpToggleButton } from "./ClaudeMcpToggleButton";
 
 /** Text colour for a Claude status line, shared by the rows and this dialog. */
@@ -187,13 +191,15 @@ function ClaudeMcpServerDetail({ view }: { readonly view: ClaudeMcpDetailView })
   }
 }
 
-/** Reconnect and Enable/Disable for the open server, as the view-model offers them. */
+/** Reconnect, Enable/Disable and Remove for the open server, as the view-model offers them. */
 function ClaudeMcpServerActions(props: {
   readonly view: ClaudeMcpDetailView;
   readonly environmentId: EnvironmentId;
+  readonly cwd: string;
   readonly projectId?: ProjectId | undefined;
   readonly threadId?: ThreadId | undefined;
   readonly onReprobe?: (() => void) | undefined;
+  readonly onChanged?: (() => void) | undefined;
 }) {
   const { view } = props;
   if (view.kind !== "server") return null;
@@ -220,6 +226,17 @@ function ClaudeMcpServerActions(props: {
           size="default"
         />
       ) : null}
+      {view.removeScope === undefined ? null : (
+        <ClaudeMcpRemoveButton
+          environmentId={props.environmentId}
+          name={view.name}
+          scope={view.removeScope}
+          cwd={props.cwd}
+          projectId={props.projectId}
+          onRemoved={props.onChanged}
+          disabled={view.refreshing}
+        />
+      )}
     </>
   );
 }
@@ -232,6 +249,8 @@ export function ClaudeMcpServerDialog(props: {
   readonly threadId?: ThreadId | undefined;
   /** Asks Claude again; runs after Reconnect or a toggle, and is Reconnect without a thread. */
   readonly onReprobe?: (() => void) | undefined;
+  /** Re-reads the list after Remove, which the server has already re-probed. */
+  readonly onChanged?: (() => void) | undefined;
   /** A fresh probe for this directory is running. */
   readonly probing?: boolean | undefined;
   /** The open server's name; null keeps the dialog closed. */
@@ -260,6 +279,7 @@ function ClaudeMcpServerDialogBody(
   props: DetailTarget & {
     readonly threadId?: ThreadId | undefined;
     readonly onReprobe?: (() => void) | undefined;
+    readonly onChanged?: (() => void) | undefined;
     readonly probing?: boolean | undefined;
   },
 ) {
@@ -273,9 +293,11 @@ function ClaudeMcpServerDialogBody(
         <ClaudeMcpServerActions
           view={view}
           environmentId={props.environmentId}
+          cwd={props.cwd}
           projectId={props.projectId}
           threadId={props.threadId}
           onReprobe={props.onReprobe}
+          onChanged={props.onChanged}
         />
         <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
       </DialogFooter>

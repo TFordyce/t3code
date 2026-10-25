@@ -17,8 +17,14 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
+import { PlusIcon } from "lucide-react";
 
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
+import {
+  ClaudeMcpAddForm,
+  ClaudeMcpAddedNotice,
+  useClaudeMcpAdd,
+} from "../settings/ClaudeMcpAddForm";
 import { ClaudeMcpGroups, useClaudeMcpStatus } from "../settings/ClaudeMcpServers";
 import { Badge } from "../ui/badge";
 import { ClaudeMcpReconnectButton } from "../settings/ClaudeMcpReconnectButton";
@@ -63,19 +69,43 @@ export function ThreadMcpPanel(props: {
     providers,
     t3Names: rows.map((row) => row.name),
   });
+  const add = useClaudeMcpAdd(props.environmentId, claude.reload);
+  const { cwd, projectId } = props;
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-medium">MCP servers</h2>
-        <Button
-          size="xs"
-          variant="outline"
-          render={<Link to="/settings/mcp" search={{ machine: props.environmentId }} />}
-        >
-          Manage MCP servers
-        </Button>
+        <div className="flex items-center gap-2">
+          {add.canAdd && claude.probes && projectId !== null && !add.adding ? (
+            <Button size="xs" variant="outline" onClick={add.open}>
+              <PlusIcon aria-hidden />
+              Add to Claude
+            </Button>
+          ) : null}
+          <Button
+            size="xs"
+            variant="outline"
+            render={<Link to="/settings/mcp" search={{ machine: props.environmentId }} />}
+          >
+            Manage MCP servers
+          </Button>
+        </div>
       </div>
+      {add.adding && cwd !== null && projectId !== null ? (
+        <ClaudeMcpAddForm
+          environmentId={props.environmentId}
+          cwd={cwd}
+          projectId={projectId}
+          scopes={["local"]}
+          t3Names={rows.map((row) => row.name)}
+          onCancel={add.cancel}
+          onAdded={add.finish}
+        />
+      ) : null}
+      {add.added === null ? null : (
+        <ClaudeMcpAddedNotice name={add.added} onDismiss={add.dismiss} />
+      )}
       {rows.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No MCP servers of your own in this session. The built-in T3 Code server is always
@@ -124,6 +154,7 @@ export function ThreadMcpPanel(props: {
             threadId={props.threadId}
             groups={claude.view.projectGroups}
             onReprobe={claude.refresh}
+            onChanged={claude.reload}
             probing={claude.isPending}
           />
         </div>

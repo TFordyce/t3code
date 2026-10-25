@@ -51,6 +51,10 @@ vi.mock(import("../../state/server"), async (original) => {
         ...actual.serverEnvironment.setClaudeMcpServerEnabled,
         permissionAtom: () => Atom.make(true),
       },
+      addClaudeMcpServer: {
+        ...actual.serverEnvironment.addClaudeMcpServer,
+        permissionAtom: () => Atom.make(true),
+      },
     },
   } as never;
 });
@@ -132,5 +136,40 @@ describe("ThreadMcpPanel", () => {
       environmentId,
       input: { cwd: "/work/repo", projectId, fresh: true },
     });
+  });
+  it("Add to Claude adds a server at Local scope for the thread's project", async () => {
+    probe.list = { servers: [] };
+    probe.command.mockReset();
+    probe.command.mockResolvedValue(AsyncResult.success({}));
+    await using screen = await render(
+      <ThreadMcpPanel
+        environmentId={environmentId}
+        sessionServers={[]}
+        projectId={projectId}
+        cwd="/work/repo"
+        threadId={threadId}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+    await expect.element(screen.getByText(/private to this project/)).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "User" })).not.toBeInTheDocument();
+    await userEvent.fill(screen.getByLabelText("Server name"), "acme");
+    await userEvent.fill(screen.getByLabelText("Command"), "npx");
+    await userEvent.click(screen.getByRole("button", { name: "Add to Claude" }));
+
+    expect(probe.command).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        cwd: "/work/repo",
+        projectId,
+        name: "acme",
+        scope: "local",
+        server: { type: "stdio", command: "npx", args: [], env: {} },
+      },
+    });
+    await expect
+      .element(screen.getByText("Added acme. It applies to new Claude sessions."))
+      .toBeVisible();
   });
 });
